@@ -13,7 +13,7 @@
     3. Tự động quét và triệt tiêu 100% các bẫy Honeypot ngầm.
     4. Mô phỏng tọa độ chạm ngón tay thật (relX, relY) & pointerType: touch.
     5. Xem quảng cáo với thời gian xem ngẫu nhiên tự nhiên (Anti-timing).
-    6. Cơ chế nghỉ mệt tự nhiên (Anti-Fatigue) 3 - 6 phút sau mỗi đợt xem.
+    6. Cơ chế nghỉ mệt tự nhiên (Anti-Fatigue) 2 - 3 phút sau mỗi đợt xem.
     7. Tự động nhận thưởng nhiệm vụ hệ thống (/tasks).
     8. Chuyển giao ca trực 24/7 tự động (Handover sau 4.8h).
 =============================================================================
@@ -463,9 +463,9 @@ async def main_loop():
                 ads_session_count += 1
 
             # NGHỈ MỆT TỰ NHIÊN (ANTI-FATIGUE CHECK):
-            # Cứ xem 3 đến 5 quảng cáo liên tiếp -> Người thật sẽ mỏi mắt, dừng lại nghỉ 3 - 6 phút
+            # Cứ xem 3 đến 5 quảng cáo liên tiếp -> Người thật sẽ mỏi mắt, dừng lại nghỉ 2 - 3 phút
             if ads_session_count >= random.randint(3, 5):
-                rest_minutes = round(random.uniform(3.0, 5.5), 1)
+                rest_minutes = round(random.uniform(2.0, 3.0), 1)
                 log("REST", f"☕ Mô phỏng người dùng nghỉ mệt tự nhiên {rest_minutes} phút (Anti-Fatigue)...", Fore.MAGENTA)
                 time.sleep(rest_minutes * 60)
                 ads_session_count = 0
