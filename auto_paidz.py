@@ -9,13 +9,15 @@
   
   TÍNH NĂNG TÀNG HÌNH & TỐI ƯU HÓA ĐỘT PHÁ:
     1. Giả lập chữ ký thiết bị Android 14 (Samsung S24 Ultra, GPU Adreno 750).
-    2. Giao thức nhị phân Protobuf chuẩn 100% khớp webapp.
-    3. Tự động quét và triệt tiêu 100% các bẫy Honeypot ngầm.
+    2. Giao thức nhị phân Protobuf chuẩn 100% khớp webapp (Telemetry đầy đủ).
+    3. Tự động quét và né 100% các bẫy Honeypot ngầm (chống ban).
     4. Tự động giải mã và vượt rào Task Gate (/campaigns/gate) nhận thêm USDT.
-    5. Ưu tiên xem các mạng QC thưởng cao nhất (0.0002 USDT/lượt).
-    6. Tối ưu thời gian nghỉ mệt siêu tốc 30 - 50 giây (Anti-Fatigue).
-    7. Giãn cách an toàn 5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST.
-    8. Chuyển giao ca trực 24/7 tự động (Handover sau 4.8h).
+    5. Tự động làm nhiệm vụ điểm danh hàng ngày (Daily Check-in) & Vòng quay may mắn (Lucky Wheel).
+    6. Tự động làm nhiệm vụ cộng đồng (Community Campaigns) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ.
+    7. Ưu tiên xem các mạng QC thưởng cao nhất (0.0002 USDT/lượt).
+    8. Tối ưu thời gian nghỉ mệt siêu tốc 30 - 50 giây (Anti-Fatigue) theo yêu cầu.
+    9. Giãn cách an toàn 5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST.
+    10. Tự động bàn giao ca trực 24/7 sau 4.8h (GitHub Actions Handover).
 =============================================================================
 """
 
@@ -42,18 +44,25 @@ init(autoreset=True)
 # -----------------------------------------------------------------
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", "34333329"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "4f9371f95000578c84dbc670aaf1f819")
-TELEGRAM_STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION", "1BVtsOIIBuzNuH5Jfb4Uwek2dG7YRqSyFk-74KTokth0VB3_UTMwM8Edh_ikn83fJOGyN7JaWzIZXnro3icoY8zsjYIlT5nQ4z_GgKknABQ74FRseCvNbz3yyTkPOfQ4xJfZnJIJHuY4EkzVOzQzYZFg_EJWOj_vvg6OVwSkQv9Nd52tl_SlH4TofoxDXDNvxLJyFcoQFH6BegTybx-pFyX2tz0rMeR7AQujnGxqdWOd4zywoFVShzsCTFeqdsBP9itJvg1YB0ISmJEYXzGEQo37IddAFGw3PJcAIY4BBctxri9_Cw-FbxhMgLU9gsotA3Rrys2jLcGV4CGfOp_IzD0CmtNm845I=")
+TELEGRAM_STRING_SESSION = os.getenv(
+    "TELEGRAM_STRING_SESSION",
+    "1BVtsOIIBuzNuH5Jfb4Uwek2dG7YRqSyFk-74KTokth0VB3_UTMwM8Edh_ikn83fJOGyN7JaWzIZXnro3ico"
+    "Y8zsjYIlT5nQ4z_GgKknABQ74FRseCvNbz3yyTkPOfQ4xJfZnJIJHuY4EkzVOzQzYZFg_EJWOj_vvg6OVwSk"
+    "Qv9Nd52tl_SlH4TofoxDXDNvxLJyFcoQFH6BegTybx-pFyX2tz0rMeR7AQujnGxqdWOd4zywoFVShzsCTFeq"
+    "dsBP9itJvg1YB0ISmJEYXzGEQo37IddAFGw3PJcAIY4BBctxri9_Cw-FbxhMgLU9gsotA3Rrys2jLcGV4CGf"
+    "Op_IzD0CmtNm845I="
+)
 
 API_BASE = "https://api.paidz.biz"
 REPO_NAME = os.getenv("GITHUB_REPOSITORY") or "auo-ele/paidz"
 WORKFLOW_FILE = os.getenv("WORKFLOW_FILE", "paidz_acc4.yml")
 MAX_RUNTIME_SECONDS = int(os.getenv("MAX_RUNTIME_SECONDS", "17500"))
 
-# Các mạng QC server-to-server (không thể claim trực tiếp từ client)
+# Các mạng QC server-to-server (bắt buộc server postback, client claim sẽ trả S2S_ONLY_NETWORK)
 S2S_NETWORKS = {"adsgram", "usl", "adloop", "onclicka", "adsbitvex"}
 
 # -----------------------------------------------------------------
-# TIỆN ÍCH PROTOBUF
+# PROTOBUF UTILS (CHÍNH XÁC 100%)
 # -----------------------------------------------------------------
 def enc_varint(n):
     res = bytearray()
@@ -83,41 +92,52 @@ def dec_varint(buf, pos):
 
 def enc_string(field_num, s):
     if not s:
-        return b""
+        return b''
     raw = s.encode('utf-8') if isinstance(s, str) else s
-    key = (field_num << 3) | 2
-    return enc_varint(key) + enc_varint(len(raw)) + raw
+    tag = enc_varint((field_num << 3) | 2)
+    return tag + enc_varint(len(raw)) + raw
+
+def enc_bytes(field_num, b):
+    if not b:
+        return b''
+    tag = enc_varint((field_num << 3) | 2)
+    return tag + enc_varint(len(b)) + b
+
+def enc_int32(field_num, v):
+    if not v:
+        return b''
+    tag = enc_varint((field_num << 3) | 0)
+    return tag + enc_varint(v)
 
 def enc_bool(field_num, b):
-    key = (field_num << 3) | 0
-    return enc_varint(key) + enc_varint(1 if b else 0)
+    if not b:
+        return b''
+    tag = enc_varint((field_num << 3) | 0)
+    return tag + b'\x01'
 
-def enc_double(field_num, val):
-    key = (field_num << 3) | 1
-    return enc_varint(key) + struct.pack('<d', float(val))
+def enc_double(field_num, d):
+    if d == 0:
+        return b''
+    tag = enc_varint((field_num << 3) | 1)
+    return tag + struct.pack('<d', float(d))
 
-def decode_proto(buf):
-    fields = {}
+def decode_proto(data):
     pos = 0
-    while pos < len(buf):
-        tag, pos = dec_varint(buf, pos)
+    fields = {}
+    while pos < len(data):
+        tag, pos = dec_varint(data, pos)
         field_num = tag >> 3
-        wire_type = tag & 0x07
-
+        wire_type = tag & 0x7
         if wire_type == 0:
-            val, pos = dec_varint(buf, pos)
+            val, pos = dec_varint(data, pos)
             fields[field_num] = val
         elif wire_type == 1:
-            if pos + 8 > len(buf):
-                break
-            val = struct.unpack('<d', buf[pos:pos+8])[0]
+            val = struct.unpack('<d', data[pos:pos+8])[0]
             pos += 8
             fields[field_num] = val
         elif wire_type == 2:
-            length, pos = dec_varint(buf, pos)
-            if pos + length > len(buf):
-                break
-            val = buf[pos:pos+length]
+            length, pos = dec_varint(data, pos)
+            val = data[pos:pos+length]
             pos += length
             if field_num in fields:
                 if not isinstance(fields[field_num], list):
@@ -126,9 +146,7 @@ def decode_proto(buf):
             else:
                 fields[field_num] = val
         elif wire_type == 5:
-            if pos + 4 > len(buf):
-                break
-            val = struct.unpack('<f', buf[pos:pos+4])[0]
+            val = struct.unpack('<f', data[pos:pos+4])[0]
             pos += 4
             fields[field_num] = val
         else:
@@ -151,9 +169,9 @@ class PaidZClient:
         self.user_agent = (
             "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 "
-            "Mobile Safari/537.36 Telegram-Android/11.5.3 (Samsung SM-S928B; Android 14; SDK 34; AVERAGE)"
+            "Mobile Safari/537.36 Telegram-Android/11.5.0 (Samsung SM-S928B; Android 14; SDK 34; AVERAGE)"
         )
-        self.device_uuid = str(uuid.uuid4())
+        self.claimed_campaign_ids = set()
 
     async def fetch_tg_init_data(self):
         log("TELEGRAM", "Đang kết nối phiên Telegram để lấy tgWebAppData mới nhất...", Fore.CYAN)
@@ -179,9 +197,15 @@ class PaidZClient:
             if "#tgWebAppData=" in raw_url:
                 hash_part = raw_url.split("#tgWebAppData=")[1].split("&tgWebAppVersion=")[0]
                 init_data = urllib.parse.unquote(hash_part)
-                log("TELEGRAM", f"Lấy tgWebAppData thành công ({len(init_data)} bytes).", Fore.GREEN)
+                log("TELEGRAM", f"Lấy tgWebAppData thành công ({len(init_data)} ký tự).", Fore.GREEN)
                 return init_data
             else:
+                frag = urllib.parse.urlparse(raw_url).fragment
+                params = urllib.parse.parse_qs(frag)
+                init_data = params.get("tgWebAppData", [None])[0]
+                if init_data:
+                    log("TELEGRAM", f"Lấy tgWebAppData từ URL fragment thành công ({len(init_data)} ký tự).", Fore.GREEN)
+                    return init_data
                 log("TELEGRAM", f"Không tìm thấy tgWebAppData trong URL: {raw_url}", Fore.YELLOW)
         except Exception as e:
             log("TELEGRAM_ERR", f"Lỗi lấy session init_data: {e}", Fore.RED)
@@ -190,35 +214,41 @@ class PaidZClient:
         return None
 
     def authenticate(self, init_data):
-        log("AUTH", "Đang xác thực Protobuf với máy chủ PaidZ (Stealth Android Mode)...", Fore.CYAN)
-        parsed = dict(urllib.parse.parse_qsl(init_data))
-        raw_user = parsed.get("user", "{}")
-        try:
-            user_obj = json.loads(raw_user)
-            self.username = user_obj.get("username", "Wind_trader")
-        except Exception:
-            self.username = "Wind_trader"
+        log("AUTH", "Đang xác thực Protobuf với máy chủ PaidZ (Stealth Android Mode)...", Fore.YELLOW)
+        visitor_id = uuid.uuid4().hex
+        telemetry_bytes = b"".join([
+            enc_string(1, visitor_id),
+            enc_string(2, "android"),
+            enc_string(3, "1080x2400"),
+            enc_string(4, self.user_agent),
+            enc_string(5, "vi-VN"),
+            enc_string(6, "Asia/Ho_Chi_Minh"),
+            enc_string(7, "Qualcomm"),
+            enc_string(8, "Adreno (TM) 750"),
+            enc_int32(9, 8),
+            enc_double(10, 8.0),
+            enc_bool(11, False),
+            enc_string(12, '"Android"'),
+            enc_string(13, '?1'),
+            enc_int32(14, 0),
+            enc_string(15, "touch"),
+            enc_int32(16, 5),
+            enc_bool(17, True)
+        ])
+
+        req_body = b"".join([
+            enc_string(1, init_data),
+            enc_string(2, ""),
+            enc_bytes(3, telemetry_bytes)
+        ])
 
         headers = {
             'Content-Type': 'application/x-protobuf',
-            'Accept': 'application/x-protobuf',
-            'x-device-platform': 'android',
-            'x-device-model': 'SM-S928B',
-            'x-app-version': '1.4.2',
-            'x-device-uuid': self.device_uuid,
+            'Accept': 'application/x-protobuf, application/json',
             'User-Agent': self.user_agent,
             'Origin': 'https://paidz.biz',
             'Referer': 'https://paidz.biz/'
         }
-
-        req_body = b"".join([
-            enc_string(1, init_data),
-            enc_string(2, "ref_8735204819"),
-            enc_string(3, "android"),
-            enc_string(4, self.device_uuid),
-            enc_string(5, "SM-S928B"),
-            enc_string(6, "1.4.2")
-        ])
 
         try:
             r = requests.post(f"{API_BASE}/auth/telegram", data=req_body, headers=headers, timeout=15)
@@ -226,29 +256,31 @@ class PaidZClient:
                 fields = decode_proto(r.content)
                 raw_token = fields.get(1)
                 self.token = raw_token.decode('utf-8', errors='ignore') if isinstance(raw_token, bytes) else raw_token
-                
-                # Cập nhật số dư & tiến độ
-                user_fields = decode_proto(fields.get(2, b"")) if isinstance(fields.get(2), bytes) else {}
-                self.balance = float(user_fields.get(4, 0.0))
-                self.ads_watched = int(user_fields.get(5, 0))
+
+                if 2 in fields and isinstance(fields[2], bytes):
+                    u = decode_proto(fields[2])
+                    raw_un = u.get(3, b'')
+                    self.username = raw_un.decode('utf-8', errors='ignore') if isinstance(raw_un, bytes) else str(raw_un)
+                    self.balance = float(u.get(11, 0.0))
+                    self.ads_watched = int(u.get(12, 0))
+                    is_banned = u.get(18, 0)
+                    if is_banned:
+                        log("AUTH_BAN", "❌ Tài khoản đã bị máy chủ đánh dấu cấm!", Fore.RED)
+                        return False
 
                 log("AUTH", f"✅ Đăng nhập thành công! User: @{self.username} | Số dư: {self.balance:.4f} USDT | Đã xem: {self.ads_watched} ads", Fore.GREEN)
                 return True
             else:
-                log("AUTH_ERR", f"Lỗi HTTP {r.status_code}: {r.text}", Fore.RED)
+                log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}: {r.text[:150]}", Fore.RED)
         except Exception as e:
-            log("AUTH_ERR", f"Ngoại lệ đăng nhập: {e}", Fore.RED)
+            log("AUTH_ERR", f"Ngoại lệ khi xác thực: {e}", Fore.RED)
         return False
 
     def get_headers(self):
         return {
             'Authorization': f'Bearer {self.token}',
             'Content-Type': 'application/x-protobuf',
-            'Accept': 'application/x-protobuf',
-            'x-device-platform': 'android',
-            'x-device-model': 'SM-S928B',
-            'x-app-version': '1.4.2',
-            'x-device-uuid': self.device_uuid,
+            'Accept': 'application/x-protobuf, application/json',
             'User-Agent': self.user_agent,
             'Origin': 'https://paidz.biz',
             'Referer': 'https://paidz.biz/'
@@ -283,19 +315,20 @@ class PaidZClient:
                             log("HONEYPOT", f"🛡️ Đã phát hiện và né bẫy Honeypot: '{net_name}'!", Fore.MAGENTA)
                             continue
 
-                        # BỘ LỌC S2S (Loại các mạng bắt buộc webhook máy chủ)
+                        # BỘ LỌC S2S (Loại các mạng bắt buộc webhook server: adsgram, usl, adloop...)
                         if net_name.lower() in S2S_NETWORKS:
                             continue
 
-                        if remaining > 0 or (daily_limit > 0 and watched_today < daily_limit):
+                        rem = remaining or (daily_limit - watched_today)
+                        if rem > 0:
                             clean_networks.append({
                                 "id": net_id,
                                 "name": net_name,
                                 "reward": reward,
-                                "remaining": remaining or (daily_limit - watched_today)
+                                "remaining": rem
                             })
                 
-                # Sắp xếp ưu tiên mạng thưởng cao nhất (0.0002 USDT)
+                # Sắp xếp ưu tiên mạng thưởng cao nhất (0.0002 USDT/lượt)
                 clean_networks.sort(key=lambda x: x.get("reward", 0.0), reverse=True)
                 return clean_networks
         except Exception as e:
@@ -325,7 +358,7 @@ class PaidZClient:
                             
                             log("GATE", f"▶️ Bắt đầu nhiệm vụ Gate: '{title}' ({cid})...", Fore.CYAN)
                             requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                            time.sleep(22) # Chờ 22s theo chuẩn quy định máy chủ
+                            time.sleep(22)  # Chờ 22s theo chuẩn quy định máy chủ
 
                             claim_headers = headers.copy()
                             claim_headers['Content-Type'] = 'application/json'
@@ -334,12 +367,106 @@ class PaidZClient:
                                 res = decode_proto(r_c.content)
                                 rw = float(res.get(3, 0.001))
                                 self.balance = float(res.get(4, self.balance + rw))
-                                log("GATE", f"🎉 Mở khóa thành công: '{title}' | Nhận thưởng: +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                log("GATE", f"🎉 Mở khóa thành công: '{title}' | Nhận: +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
                                 break
                     return True
+                elif completed >= required:
+                    return False
         except Exception as e:
             log("GATE_ERR", f"Lỗi xử lý Task Gate: {e}", Fore.RED)
         return False
+
+    def spin_lucky_wheel(self):
+        """Tự động quay Vòng quay may mắn hàng ngày để nhận thưởng USDT / Boost."""
+        try:
+            headers = self.get_headers()
+            rw = requests.get(f"{API_BASE}/wheel/status", headers=headers, timeout=10)
+            if rw.status_code == 200:
+                wheel_data = decode_proto(rw.content)
+                can_spin = wheel_data.get(3, False)
+                if can_spin:
+                    log("WHEEL", "🎡 Phát hiện lượt quay Lucky Wheel miễn phí! Đang quay...", Fore.CYAN)
+                    nonce = str(int(time.time() * 1000))
+                    spin_body = enc_string(1, nonce)
+                    r_spin = requests.post(f"{API_BASE}/wheel/spin", data=spin_body, headers=headers, timeout=10)
+                    if r_spin.status_code == 200:
+                        res = decode_proto(r_spin.content)
+                        new_bal = float(res.get(4, self.balance))
+                        if new_bal > self.balance:
+                            log("WHEEL", f"🎉 Quay trúng thưởng USDT! Số dư mới: {new_bal:.4f} USDT", Fore.GREEN)
+                            self.balance = new_bal
+                        else:
+                            log("WHEEL", "✅ Đã hoàn thành lượt quay Lucky Wheel!", Fore.GREEN)
+        except Exception as e:
+            log("WHEEL_ERR", f"Lỗi quay thưởng wheel: {e}", Fore.RED)
+
+    def claim_available_tasks(self):
+        """Tự động kiểm tra và nhận thưởng các nhiệm vụ hệ thống (/tasks)."""
+        try:
+            headers = self.get_headers()
+            r = requests.get(f"{API_BASE}/tasks", headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = decode_proto(r.content)
+                tasks = data.get(1, [])
+                if not isinstance(tasks, list):
+                    tasks = [tasks]
+                for t in tasks:
+                    if isinstance(t, bytes):
+                        tf = decode_proto(t)
+                        tid = tf.get(1, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(1), bytes) else str(tf.get(1))
+                        title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2))
+                        is_completed = tf.get(11, 0)
+                        if not is_completed:
+                            req_c = enc_string(1, tid)
+                            r_c = requests.post(f"{API_BASE}/tasks/{tid}/claim", data=req_c, headers=headers, timeout=10)
+                            if r_c.status_code == 200:
+                                res = decode_proto(r_c.content)
+                                rw = float(res.get(3, 0.001))
+                                self.balance = float(res.get(4, self.balance + rw))
+                                log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+        except Exception as e:
+            log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
+
+    def claim_community_campaigns(self):
+        """Tự động làm nhiệm vụ cộng đồng (Community Campaigns) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ."""
+        try:
+            headers = self.get_headers()
+            rf = requests.get(f"{API_BASE}/campaigns/feed?page=1&limit=15", headers=headers, timeout=10)
+            if rf.status_code == 200:
+                fd = decode_proto(rf.content)
+                c_items = fd.get(1, [])
+                if not isinstance(c_items, list):
+                    c_items = [c_items]
+                
+                for it in c_items:
+                    if isinstance(it, bytes):
+                        f = decode_proto(it)
+                        cid = f.get(1, b'').decode('utf-8', errors='ignore') if isinstance(f.get(1), bytes) else str(f.get(1))
+                        title = f.get(2, b'').decode('utf-8', errors='ignore') if isinstance(f.get(2), bytes) else str(f.get(2))
+                        
+                        if cid in self.claimed_campaign_ids:
+                            continue
+
+                        log("CAMPAIGN", f"📋 Bắt đầu làm nhiệm vụ cộng đồng: '{title}' ({cid})...", Fore.CYAN)
+                        r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+                        if r_start.status_code == 200:
+                            time.sleep(22)
+                            claim_headers = headers.copy()
+                            claim_headers['Content-Type'] = 'application/json'
+                            r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_headers, json={}, timeout=10)
+                            if r_c.status_code == 200:
+                                res_p = decode_proto(r_c.content)
+                                rw = float(res_p.get(3, 0.0005))
+                                self.balance = float(res_p.get(4, self.balance + rw))
+                                log("CAMPAIGN", f"🎉 Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                self.claimed_campaign_ids.add(cid)
+                                time.sleep(5)
+                            else:
+                                self.claimed_campaign_ids.add(cid)
+                        else:
+                            self.claimed_campaign_ids.add(cid)
+        except Exception as e:
+            log("CAMPAIGN_ERR", f"Lỗi nhiệm vụ cộng đồng: {e}", Fore.RED)
 
     def watch_ad_stealth(self, network_name):
         rel_x = round(random.uniform(0.35, 0.68), 4)
@@ -361,7 +488,7 @@ class PaidZClient:
                 err_code = err_data.get(5, b'')
                 err_msg = err_data.get(6, b'')
                 
-                # Nếu bị Task Gate chặn -> Tự động xử lý ngay
+                # Nếu bị Task Gate chặn -> Tự động giải mã vượt rào ngay
                 if b'TASK_GATE_REQUIRED' in err_code or b'TASK_GATE' in err_msg:
                     self.check_and_unlock_task_gate()
                     return False, 3
@@ -377,7 +504,7 @@ class PaidZClient:
             if not session_token:
                 return False, 5
 
-            # Thời lượng xem tự nhiên (tối ưu hóa nhanh gọn)
+            # Thời lượng xem tự nhiên (tối ưu hóa nhanh gọn ~5-6s)
             view_seconds = max(min_duration, 4) + round(random.uniform(1.2, 2.2), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
             time.sleep(view_seconds)
@@ -407,27 +534,6 @@ class PaidZClient:
             log("WATCH_EXC", f"Ngoại lệ khi xem ad: {e}", Fore.RED)
         return False, 8
 
-    def claim_available_tasks(self):
-        try:
-            r = requests.get(f"{API_BASE}/tasks", headers=self.get_headers(), timeout=10)
-            if r.status_code == 200:
-                data = decode_proto(r.content)
-                tasks = data.get(1, [])
-                if not isinstance(tasks, list):
-                    tasks = [tasks]
-                for t in tasks:
-                    if isinstance(t, bytes):
-                        tf = decode_proto(t)
-                        tid = tf.get(1, b'')
-                        tid_str = tid.decode('utf-8', errors='ignore') if isinstance(tid, bytes) else str(tid)
-                        is_completed = tf.get(11, 0)
-                        if not is_completed:
-                            req_c = enc_string(1, tid_str)
-                            r_c = requests.post(f"{API_BASE}/tasks/{tid_str}/claim", data=req_c, headers=self.get_headers(), timeout=10)
-                            if r_c.status_code == 200:
-                                log("TASK", f"✅ Hoàn thành nhận thưởng nhiệm vụ: {tid_str}", Fore.GREEN)
-        except Exception:
-            pass
 
 def trigger_next_shift():
     log("HANDOVER", f"🔄 Chuẩn bị chuyển giao ca làm việc tiếp theo trên {REPO_NAME}...", Fore.CYAN)
@@ -449,13 +555,13 @@ def trigger_next_shift():
     return False
 
 # -----------------------------------------------------------------
-# VÒNG LẶP CHÍNH 24/7 VỚI BỘ ĐIỀU PHỐI ƯU TIÊN & NGHỈ SIÊU TỐC
+# VÒNG LẶP CHÍNH 24/7 VỚI ĐIỀU PHỐI ƯU TIÊN & NGHỈ SIÊU TỐC 30 - 50 GIÂY
 # -----------------------------------------------------------------
 async def main_loop():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO PAIDZ ($USDT) 24/7 - CHẾ ĐỘ TÀNG HÌNH ANTI-DETECTION STEALTH
-  Tối ưu hóa tốc độ cao & Tự động mở khóa Task Gate
+  Tối ưu hóa tốc độ cao & Nghỉ siêu tốc 30-50s & Tự động làm mọi nhiệm vụ
 =============================================================================
     """ + Style.RESET_ALL)
 
@@ -469,18 +575,21 @@ async def main_loop():
         log("MAIN", "Đăng nhập thất bại.", Fore.RED)
         return
 
-    # Mở khóa Gate & Claim nhiệm vụ đầu ca
+    # Khởi động: Mở khóa Gate, quay thưởng Wheel, nhận Daily Check-in & Nhiệm vụ
     bot.check_and_unlock_task_gate()
+    bot.spin_lucky_wheel()
     bot.claim_available_tasks()
+    bot.claim_community_campaigns()
 
     start_time = time.time()
     last_refresh_time = time.time()
+    last_task_check_time = time.time()
     ads_session_count = 0
     network_cooldowns = {}
 
     while True:
         try:
-            # Kiểm tra thời lượng phiên 4.8 tiếng
+            # Kiểm tra thời lượng phiên 4.8 tiếng -> Tự động kích hoạt ca sau
             if (time.time() - start_time) >= MAX_RUNTIME_SECONDS:
                 log("HANDOVER", "Hoàn thành ca trực 4.8 tiếng. Tự động chuyển giao ca trực tiếp theo...", Fore.CYAN)
                 trigger_next_shift()
@@ -494,51 +603,58 @@ async def main_loop():
                     bot.check_and_unlock_task_gate()
                     last_refresh_time = time.time()
 
+            # Quét nhiệm vụ mới mỗi 60 phút
+            if (time.time() - last_task_check_time) >= 3600:
+                bot.claim_available_tasks()
+                bot.claim_community_campaigns()
+                last_task_check_time = time.time()
+
             # Lấy danh sách quảng cáo an toàn (đã lọc sạch Honeypot & S2S)
             networks = bot.fetch_clean_networks()
             if not networks:
+                # Danh sách mặc định các mạng trả thưởng client cao nhất
                 networks = [
-                    {"id": "net_gigapub", "name": "gigapub", "reward": 0.0002, "remaining": 50},
-                    {"id": "net_tads", "name": "tads", "reward": 0.0002, "remaining": 50},
-                    {"id": "net_monetix", "name": "monetix", "reward": 0.0002, "remaining": 50},
+                    {"id": "net_gigapub", "name": "gigapub", "reward": 0.0002, "remaining": 70},
+                    {"id": "net_tads", "name": "tads", "reward": 0.0002, "remaining": 60},
+                    {"id": "net_monetix", "name": "monetix", "reward": 0.0002, "remaining": 70},
                     {"id": "net_richads", "name": "richads", "reward": 0.0002, "remaining": 50},
-                    {"id": "net_adexium", "name": "adexium", "reward": 0.0001, "remaining": 50},
+                    {"id": "net_adexium", "name": "adexium", "reward": 0.0001, "remaining": 60},
                     {"id": "net_telega", "name": "telega", "reward": 0.0001, "remaining": 30}
                 ]
 
             now = time.time()
-            # Lọc các mạng đã hết cooldown
+            # Lọc các mạng đã hết thời gian cooldown
             ready_nets = [n for n in networks if now >= network_cooldowns.get(n["name"], 0)]
 
             if not ready_nets:
-                # Nếu tất cả mạng đều đang cooldown -> Chờ mạng gần nhất
+                # Nếu tất cả mạng đều đang trong cooldown -> Chờ mạng gần nhất
                 wait_time = min(network_cooldowns.values()) - now
                 sleep_t = max(2.0, min(wait_time, 6.0))
                 time.sleep(sleep_t)
                 continue
 
-            # Ưu tiên nhóm có reward cao nhất
+            # Ưu tiên các mạng có reward cao nhất (0.0002 USDT/lượt)
             max_rw = max(n["reward"] for n in ready_nets)
             top_tier_nets = [n for n in ready_nets if n["reward"] >= max_rw]
             target_net = random.choice(top_tier_nets)
             net_name = target_net["name"]
 
             success, cd = bot.watch_ad_stealth(net_name)
-            # Lưu thời điểm hết cooldown của mạng này
+            # Ghi nhớ thời điểm hết cooldown của mạng này
             network_cooldowns[net_name] = time.time() + cd
 
             if success:
                 ads_session_count += 1
 
             # NGHỈ MỆT TỰ NHIÊN (ANTI-FATIGUE CHECK):
-            # Cứ xem 5 đến 7 quảng cáo liên tiếp -> Nghỉ nhanh 30 - 50 giây theo yêu cầu
+            # Cứ xem 5 đến 7 quảng cáo liên tiếp -> Nghỉ nhanh 30 - 50 giây theo yêu cầu của bạn
             if ads_session_count >= random.randint(5, 7):
                 rest_seconds = round(random.uniform(30.0, 50.0), 1)
                 log("REST", f"☕ Mô phỏng người dùng nghỉ mệt {rest_seconds}s (Anti-Fatigue)...", Fore.MAGENTA)
                 time.sleep(rest_seconds)
                 ads_session_count = 0
             else:
-                # Giãn cách an toàn giữa 2 lần xem (5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST)
+                # Giãn cách an toàn giữa 2 lần xem (5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST)
                 gap_sleep = round(random.uniform(5.5, 7.0), 1)
                 time.sleep(gap_sleep)
 
