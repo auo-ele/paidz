@@ -7,28 +7,27 @@
   Telegram Bot: @paidzapp (Short name: 'start')
   Account: Acc 4 - Wind_trader (UID: 8735204819)
   
-  TÍNH NĂNG TÀNG HÌNH & TỐI ƯU HÓA ĐỘT PHÁ (BẢN NÂNG CẤP AUTO JOIN -> CLAIM -> OUT):
-    1. Giả lập chữ ký thiết bị Android 14 (Samsung S24 Ultra, GPU Adreno 750).
+  BẢN NÂNG CẤP HOÀN CHỈNH (AUTO JOIN -> VERIFY REAL BALANCE -> AUTO OUT):
+    1. Giả lập chữ ký thiết bị Android 14 cố định theo từng tài khoản (MD5 Fingerprint).
     2. Giao thức nhị phân Protobuf chuẩn 100% khớp webapp (Telemetry đầy đủ).
     3. Tự động quét và né 100% các bẫy Honeypot ngầm (chống ban).
     4. Tự động giải mã Task Gate & Community Campaigns:
-       -> Tự động JOIN kênh/nhóm Telegram (hoặc /start bot) -> Chờ -> CLAIM -> Tự động OUT (rời kênh).
-    5. Tự động làm nhiệm vụ điểm danh hàng ngày (Daily Check-in) & Vòng quay may mắn (Lucky Wheel).
-    6. Ưu tiên xem các mạng QC thưởng cao nhất (0.0002 USDT/lượt).
-    7. Tối ưu thời gian nghỉ mệt siêu tốc (Anti-Fatigue).
-    8. Giãn cách an toàn 5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST.
-    9. Tự động bàn giao ca trực 24/7 sau 4.8h (GitHub Actions Handover).
+       -> Lọc bỏ link ảnh rác (t.me/i/userpic/...) -> Tự động JOIN kênh/nhóm Telegram
+       -> Chờ đủ giây -> CLAIM -> Đối chiếu số dư thật từ Server -> Tự động OUT kênh.
+    5. Tự động làm nhiệm vụ hệ thống (/tasks) & Vòng quay may mắn (Lucky Wheel).
+    6. Tái sử dụng kết nối HTTP Keep-Alive (requests.Session) giúp chạy mượt 24/7.
+    7. Tự động bàn giao ca trực 24/7 sau 4.8h (GitHub Actions Handover).
 =============================================================================
 """
 
 import os
-import re
 import sys
 import time
 import json
 import uuid
 import struct
 import random
+import hashlib
 import asyncio
 import urllib.parse
 import requests
@@ -36,7 +35,7 @@ from colorama import init, Fore, Style
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError, UserAlreadyParticipantError, InviteHashExpiredError
-from telethon.tl.functions.messages import RequestAppWebViewRequest, ImportChatInviteRequest, DeleteChatUserRequest
+from telethon.tl.functions.messages import RequestAppWebViewRequest, ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.types import InputBotAppShortName
 
@@ -135,6 +134,8 @@ def decode_proto(data):
             val, pos = dec_varint(data, pos)
             fields[field_num] = val
         elif wire_type == 1:
+            if pos + 8 > len(data):
+                break
             val = struct.unpack('<d', data[pos:pos+8])[0]
             pos += 8
             fields[field_num] = val
@@ -149,6 +150,8 @@ def decode_proto(data):
             else:
                 fields[field_num] = val
         elif wire_type == 5:
+            if pos + 4 > len(data):
+                break
             val = struct.unpack('<f', data[pos:pos+4])[0]
             pos += 4
             fields[field_num] = val
@@ -161,27 +164,38 @@ def log(tag, msg, color=Fore.WHITE):
     print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:10s}]{Style.RESET_ALL} {msg}", flush=True)
 
 # -----------------------------------------------------------------
-# HÀM HỖ TRỢ TELEGRAM: AUTO JOIN & AUTO LEAVE (OUT)
+# HÀM HỖ TRỢ TELEGRAM: LỌC URL THẬT, AUTO JOIN & AUTO LEAVE (OUT)
 # -----------------------------------------------------------------
 def extract_url_from_proto_fields(tf):
-    """Quét mọi trường protobuf để tìm URL nhiệm vụ (t.me hoặc http)."""
+    """
+    Quét mọi trường protobuf để tìm URL nhiệm vụ thật.
+    Tuyệt đối bỏ qua link ảnh đại diện (/i/userpic/...) hoặc file ảnh tĩnh (.jpg, .png...).
+    """
+    candidates = []
     for fld, val in tf.items():
         items = val if isinstance(val, list) else [val]
         for item in items:
             if isinstance(item, bytes):
                 s = item.decode('utf-8', errors='ignore').strip()
-                if "t.me/" in s or "telegram.me/" in s or s.startswith("http"):
-                    return s
-                if s.startswith("@") and len(s) > 3 and " " not in s:
+                # Bỏ qua link ảnh avatar hoặc tài nguyên tĩnh
+                if "/i/userpic/" in s or any(s.lower().endswith(ext) for ext in (".jpg", ".png", ".jpeg", ".webp", ".gif", ".svg")):
+                    continue
+                if "t.me/" in s or "telegram.me/" in s:
+                    return s  # Ưu tiên số 1: Link Telegram hợp lệ
+                if s.startswith("@") and len(s) > 3 and " " not in s and "/" not in s:
                     return f"https://t.me/{s[1:]}"
-    return ""
+                if s.startswith("http"):
+                    candidates.append(s)
+    return candidates[0] if candidates else ""
 
 async def tg_join_target(url: str):
     """
     Tự động tham gia Channel/Group hoặc gửi /start cho Bot từ URL nhiệm vụ.
-    Trả về đối tượng entity đã tham gia để lát nữa gọi hàm Leave (Out).
+    Trả về đối tượng entity đã tham gia để sau khi Claim xong sẽ gọi hàm Leave (Out).
     """
     if not url or ("t.me/" not in url and "telegram.me/" not in url):
+        return None
+    if "/i/userpic/" in url:
         return None
 
     client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
@@ -209,7 +223,7 @@ async def tg_join_target(url: str):
                 updates = await client(ImportChatInviteRequest(invite_hash))
                 if hasattr(updates, "chats") and updates.chats:
                     joined_entity = updates.chats[0]
-                    log("TG_JOIN", f"✅ Đã tham gia nhóm riêng tư thành công!", Fore.GREEN)
+                    log("TG_JOIN", "✅ Đã tham gia nhóm riêng tư thành công!", Fore.GREEN)
             except UserAlreadyParticipantError:
                 log("TG_JOIN", "ℹ️ Tài khoản đã ở trong nhóm riêng tư này từ trước.", Fore.CYAN)
                 try:
@@ -222,7 +236,7 @@ async def tg_join_target(url: str):
 
         # Trường hợp 2: Username công khai (Channel, Group hoặc Bot)
         username = path.split("/")[0].replace("@", "")
-        if not username:
+        if not username or username.lower() in ("i", "addstickers", "proxy", "socks", "share"):
             return None
 
         entity = await client.get_entity(username)
@@ -233,7 +247,6 @@ async def tg_join_target(url: str):
             cmd = f"/start {start_param}".strip()
             log("TG_BOT", f"🤖 Đang gửi lệnh '{cmd}' tới bot @{username}...", Fore.CYAN)
             await client.send_message(entity, cmd)
-            # Với bot thì không cần leavechannel, trả về None
             return None
         else:
             # Nếu là Channel hoặc Supergroup -> Bấm Join
@@ -255,7 +268,7 @@ async def tg_join_target(url: str):
     return joined_entity
 
 async def tg_leave_target(entity):
-    """Tự động rời khỏi Channel/Group sau khi đã Claim thưởng thành công."""
+    """Tự động rời khỏi Channel/Group sau khi đã Claim xong."""
     if not entity:
         return
 
@@ -271,7 +284,6 @@ async def tg_leave_target(entity):
             await client(LeaveChannelRequest(entity))
             log("TG_LEAVE", f"✅ Đã rời khỏi '{title}' thành công!", Fore.GREEN)
         except Exception:
-            # Dự phòng cho nhóm thường (Basic chat group)
             await client.delete_dialog(entity)
             log("TG_LEAVE", f"✅ Đã xóa/rời hội thoại '{title}' thành công!", Fore.GREEN)
     except Exception as e:
@@ -285,6 +297,7 @@ async def tg_leave_target(entity):
 class PaidZClient:
     def __init__(self):
         self.token = None
+        self.init_data = None
         self.username = None
         self.balance = 0.0
         self.ads_watched = 0
@@ -293,6 +306,9 @@ class PaidZClient:
             "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 "
             "Mobile Safari/537.36 Telegram-Android/11.5.0 (Samsung SM-S928B; Android 14; SDK 34; AVERAGE)"
         )
+        # Cố định visitor_id theo tài khoản để không bị phát hiện đổi thiết bị
+        self.visitor_id = hashlib.md5(TELEGRAM_STRING_SESSION.encode()).hexdigest()
+        self.http = requests.Session()
         self.claimed_campaign_ids = set()
 
     async def fetch_tg_init_data(self):
@@ -320,6 +336,7 @@ class PaidZClient:
                 hash_part = raw_url.split("#tgWebAppData=")[1].split("&tgWebAppVersion=")[0]
                 init_data = urllib.parse.unquote(hash_part)
                 log("TELEGRAM", f"Lấy tgWebAppData thành công ({len(init_data)} ký tự).", Fore.GREEN)
+                self.init_data = init_data
                 return init_data
             else:
                 frag = urllib.parse.urlparse(raw_url).fragment
@@ -327,6 +344,7 @@ class PaidZClient:
                 init_data = params.get("tgWebAppData", [None])[0]
                 if init_data:
                     log("TELEGRAM", f"Lấy tgWebAppData từ URL fragment thành công ({len(init_data)} ký tự).", Fore.GREEN)
+                    self.init_data = init_data
                     return init_data
                 log("TELEGRAM", f"Không tìm thấy tgWebAppData trong URL: {raw_url}", Fore.YELLOW)
         except Exception as e:
@@ -335,11 +353,17 @@ class PaidZClient:
             await client.disconnect()
         return None
 
-    def authenticate(self, init_data):
-        log("AUTH", "Đang xác thực Protobuf với máy chủ PaidZ (Stealth Android Mode)...", Fore.YELLOW)
-        visitor_id = uuid.uuid4().hex
+    def authenticate(self, init_data=None, silent=False):
+        if init_data:
+            self.init_data = init_data
+        if not self.init_data:
+            return False
+
+        if not silent:
+            log("AUTH", "Đang xác thực Protobuf với máy chủ PaidZ (Stealth Android Mode)...", Fore.YELLOW)
+
         telemetry_bytes = b"".join([
-            enc_string(1, visitor_id),
+            enc_string(1, self.visitor_id),
             enc_string(2, "android"),
             enc_string(3, "1080x2400"),
             enc_string(4, self.user_agent),
@@ -359,7 +383,7 @@ class PaidZClient:
         ])
 
         req_body = b"".join([
-            enc_string(1, init_data),
+            enc_string(1, self.init_data),
             enc_string(2, ""),
             enc_bytes(3, telemetry_bytes)
         ])
@@ -373,7 +397,7 @@ class PaidZClient:
         }
 
         try:
-            r = requests.post(f"{API_BASE}/auth/telegram", data=req_body, headers=headers, timeout=15)
+            r = self.http.post(f"{API_BASE}/auth/telegram", data=req_body, headers=headers, timeout=15)
             if r.status_code == 200:
                 fields = decode_proto(r.content)
                 raw_token = fields.get(1)
@@ -390,12 +414,15 @@ class PaidZClient:
                         log("AUTH_BAN", "❌ Tài khoản đã bị máy chủ đánh dấu cấm!", Fore.RED)
                         return False
 
-                log("AUTH", f"✅ Đăng nhập thành công! User: @{self.username} | Số dư: {self.balance:.4f} USDT | Đã xem: {self.ads_watched} ads", Fore.GREEN)
+                if not silent:
+                    log("AUTH", f"✅ Đăng nhập thành công! User: @{self.username} | Số dư: {self.balance:.4f} USDT | Đã xem: {self.ads_watched} ads", Fore.GREEN)
                 return True
             else:
-                log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}: {r.text[:150]}", Fore.RED)
+                if not silent:
+                    log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}: {r.text[:150]}", Fore.RED)
         except Exception as e:
-            log("AUTH_ERR", f"Ngoại lệ khi xác thực: {e}", Fore.RED)
+            if not silent:
+                log("AUTH_ERR", f"Ngoại lệ khi xác thực: {e}", Fore.RED)
         return False
 
     def get_headers(self):
@@ -408,10 +435,57 @@ class PaidZClient:
             'Referer': 'https://paidz.biz/'
         }
 
+    def parse_claim_response(self, content: bytes, old_balance: float):
+        """
+        Giải mã chính xác phản hồi từ máy chủ khi Claim và đối chiếu với số dư thật.
+        Trả về: (is_real_success, reward_amount, new_balance, info_msg)
+        """
+        # Bước 1: Kiểm tra nếu phản hồi là JSON
+        if content and content.startswith(b"{"):
+            try:
+                j = json.loads(content.decode('utf-8', errors='ignore'))
+                if j.get("error") or j.get("success") is False:
+                    return False, 0.0, old_balance, str(j.get("message") or j.get("error"))
+            except Exception:
+                pass
+
+        # Bước 2: Giải mã Protobuf
+        res = decode_proto(content) if content else {}
+
+        # Kiểm tra chuỗi thông báo lỗi trong các field
+        for err_fld in [5, 6, 10, 11]:
+            val = res.get(err_fld)
+            if isinstance(val, bytes) and len(val) > 0:
+                err_str = val.decode('utf-8', errors='ignore')
+                if any(k in err_str.upper() for k in ["ERR", "FAIL", "ALREADY", "NOT_", "INVALID", "WAIT", "COMPLETED"]):
+                    return False, 0.0, old_balance, err_str
+
+        # Tìm trường chứa Reward và Balance mới trong gói Protobuf trả về
+        proto_rw = 0.0
+        proto_bal = 0.0
+        for fld, val in res.items():
+            if isinstance(val, float):
+                if 0 < val < 0.05 and proto_rw == 0.0:
+                    proto_rw = val
+                elif val > old_balance:
+                    proto_bal = val
+
+        if proto_bal > old_balance:
+            actual_rw = proto_bal - old_balance
+            return True, actual_rw, proto_bal, "OK (Proto Balance)"
+
+        # Bước 3: Đồng bộ lại với /auth/telegram (chế độ im lặng) để kiểm tra số dư thật trên DB của PaidZ
+        self.authenticate(silent=True)
+        if self.balance > old_balance:
+            actual_rw = self.balance - old_balance
+            return True, actual_rw, self.balance, "OK (Verified Server DB)"
+
+        return False, 0.0, self.balance, f"Không được cộng tiền (Có thể đã làm trước đó | Raw: {res})"
+
     def fetch_clean_networks(self):
         """Lấy danh sách các mạng quảng cáo client hợp lệ, loại trừ S2S và Honeypot."""
         try:
-            r = requests.get(f"{API_BASE}/ads/networks", headers=self.get_headers(), timeout=10)
+            r = self.http.get(f"{API_BASE}/ads/networks", headers=self.get_headers(), timeout=10)
             if r.status_code == 200:
                 data = decode_proto(r.content)
                 raw_nets = data.get(1, [])
@@ -437,7 +511,7 @@ class PaidZClient:
                             log("HONEYPOT", f"🛡️ Đã phát hiện và né bẫy Honeypot: '{net_name}'!", Fore.MAGENTA)
                             continue
 
-                        # BỘ LỌC S2S (Loại các mạng bắt buộc webhook server: adsgram, usl, adloop...)
+                        # BỘ LỌC S2S
                         if net_name.lower() in S2S_NETWORKS:
                             continue
 
@@ -450,7 +524,6 @@ class PaidZClient:
                                 "remaining": rem
                             })
                 
-                # Sắp xếp ưu tiên mạng thưởng cao nhất (0.0002 USDT/lượt)
                 clean_networks.sort(key=lambda x: x.get("reward", 0.0), reverse=True)
                 return clean_networks
         except Exception as e:
@@ -461,88 +534,75 @@ class PaidZClient:
         """
         Quy trình khép kín cho 1 chiến dịch (Gate hoặc Community Campaign):
         1. Gọi /start trên PaidZ
-        2. Nếu là link Telegram -> Tự động JOIN (hoặc /start bot)
+        2. Tự động JOIN kênh Telegram thật (bỏ qua ảnh userpic)
         3. Đợi đủ thời gian yêu cầu
-        4. Gọi /claim (Thử Protobuf & JSON)
+        4. Gọi /claim và kiểm tra số dư thật tăng lên hay không
         5. Tự động LEAVE (Out) khỏi kênh Telegram vừa tham gia
         """
         headers = self.get_headers()
+        old_balance = self.balance
         log(tag_name, f"▶️ Bắt đầu nhiệm vụ: '{title}' ({cid})...", Fore.CYAN)
 
-        # Bước 1: Gọi start nhiệm vụ trên máy chủ PaidZ
-        r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+        # Bước 1: Gọi /start
+        r_start = self.http.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
         if r_start.status_code != 200:
-            log(f"{tag_name}_ERR", f"Start '{title}' thất bại (HTTP {r_start.status_code})", Fore.YELLOW)
+            start_err = decode_proto(r_start.content)
+            log(f"{tag_name}_SKIP", f"Bỏ qua '{title}' (HTTP {r_start.status_code} - Đã hoàn thành hoặc hết hạn): {start_err}", Fore.YELLOW)
             return False
 
         start_data = decode_proto(r_start.content)
-        # Nếu trong start_data trả về link URL động thì ưu tiên lấy thêm
-        if not url_str:
-            url_str = extract_url_from_proto_fields(start_data)
+        dynamic_url = extract_url_from_proto_fields(start_data)
+        if dynamic_url:
+            url_str = dynamic_url
 
         joined_entity = None
 
-        # Bước 2: Tương tác thực tế với URL (Tự động Join Telegram hoặc mở Web)
+        # Bước 2: Tự động Join kênh Telegram hoặc truy cập Web
         if url_str:
             log(tag_name, f"🔗 Mục tiêu nhiệm vụ: {url_str[:65]}", Fore.CYAN)
             if "t.me/" in url_str or "telegram.me/" in url_str:
                 joined_entity = await tg_join_target(url_str)
             else:
                 try:
-                    requests.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
+                    self.http.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
                 except Exception:
                     pass
 
         # Bước 3: Chờ đủ thời gian trước khi bấm Claim
         wait_sec = int(start_data.get(5, 22))
-        wait_sec = max(16, min(wait_sec, 35))
+        if wait_sec < 12 or wait_sec > 45:
+            wait_sec = 22
         log(tag_name, f"⏳ Đang chờ {wait_sec}s để hệ thống xác nhận...", Fore.CYAN)
         await asyncio.sleep(wait_sec)
 
-        # Bước 4: Gửi yêu cầu Claim thưởng
+        # Bước 4: Gọi /claim và kiểm tra biến động số dư thật
         claimed = False
         claim_body = enc_string(1, cid)
 
-        for attempt in range(3):
-            # Thử phương thức 1: Protobuf (có body cid)
-            r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", data=claim_body, headers=headers, timeout=10)
+        for attempt in range(2):
+            r_c = self.http.post(f"{API_BASE}/campaigns/{cid}/claim", data=claim_body, headers=headers, timeout=10)
+            if r_c.status_code != 200:
+                claim_h2 = headers.copy()
+                claim_h2['Content-Type'] = 'application/json'
+                r_c = self.http.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_h2, json={}, timeout=10)
+
             if r_c.status_code == 200:
-                res = decode_proto(r_c.content)
-                rw = float(res.get(3, 0.001))
-                self.balance = float(res.get(4, self.balance + rw))
-                log(tag_name, f"🎉 Claim thành công: '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                claimed = True
+                ok, rw, new_bal, reason = self.parse_claim_response(r_c.content, old_balance)
+                if ok:
+                    self.balance = new_bal
+                    log(tag_name, f"🎉 CỘNG TIỀN THẬT: '{title}' | +{rw:.4f} USDT | Số dư mới: {self.balance:.4f} USDT", Fore.GREEN)
+                    claimed = True
+                else:
+                    log(f"{tag_name}_INFO", f"ℹ️ Đã xử lý '{title}' nhưng số dư giữ nguyên ({self.balance:.4f} USDT): {reason}", Fore.YELLOW)
                 break
+            else:
+                err_info = decode_proto(r_c.content)
+                log(f"{tag_name}_WARN", f"Claim lần {attempt+1} lỗi (HTTP {r_c.status_code}): {err_info}", Fore.YELLOW)
+                await asyncio.sleep(4)
 
-            # Thử phương thức 2: Protobuf rỗng (một số endpoint POST không nhận body)
-            r_c_empty = requests.post(f"{API_BASE}/campaigns/{cid}/claim", data=b"", headers=headers, timeout=10)
-            if r_c_empty.status_code == 200:
-                res = decode_proto(r_c_empty.content)
-                rw = float(res.get(3, 0.001))
-                self.balance = float(res.get(4, self.balance + rw))
-                log(tag_name, f"🎉 Claim thành công (Empty Proto): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                claimed = True
-                break
-
-            # Thử phương thức 3: JSON
-            claim_h2 = headers.copy()
-            claim_h2['Content-Type'] = 'application/json'
-            r_c2 = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_h2, json={}, timeout=10)
-            if r_c2.status_code == 200:
-                res = decode_proto(r_c2.content)
-                rw = float(res.get(3, 0.001))
-                self.balance = float(res.get(4, self.balance + rw))
-                log(tag_name, f"🎉 Claim thành công (JSON): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                claimed = True
-                break
-
-            err_info = decode_proto(r_c.content)
-            log(f"{tag_name}_WARN", f"Claim lần {attempt+1} chưa được (HTTP {r_c.status_code}): {err_info} -> Chờ 5s thử lại...", Fore.YELLOW)
-            await asyncio.sleep(5)
-
-        # Bước 5: Chờ 3s an toàn rồi tự động RỜI KÊNH (OUT)
+        # Bước 5: Chờ 5s an toàn rồi tự động RỜI KÊNH (OUT)
         if joined_entity:
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             await tg_leave_target(joined_entity)
 
         return claimed
@@ -551,7 +611,7 @@ class PaidZClient:
         """Tự động kiểm tra và mở khóa Task Gate (Join -> Claim -> Out)."""
         try:
             headers = self.get_headers()
-            r_gate = requests.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
+            r_gate = self.http.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
             if r_gate.status_code != 200:
                 log("GATE_ERR", f"Không thể lấy thông tin Gate (HTTP {r_gate.status_code})", Fore.RED)
                 return False
@@ -585,13 +645,12 @@ class PaidZClient:
                 if not cid:
                     continue
 
-                ok = await self.execute_campaign_flow(cid, title, url_str, tag_name="GATE")
-                if ok:
-                    unlocked_any = True
-                    completed += 1
-                    if required > 0 and completed >= required:
-                        log("GATE", f"✅ Đã mở khóa đủ yêu cầu Task Gate ({completed}/{required})!", Fore.GREEN)
-                        break
+                await self.execute_campaign_flow(cid, title, url_str, tag_name="GATE")
+                unlocked_any = True
+                completed += 1
+                if required > 0 and completed >= required:
+                    log("GATE", f"✅ Đã xử lý đủ số lượng yêu cầu Task Gate ({completed}/{required})!", Fore.GREEN)
+                    break
 
             return unlocked_any
 
@@ -603,23 +662,23 @@ class PaidZClient:
         """Tự động quay Vòng quay may mắn hàng ngày để nhận thưởng USDT / Boost."""
         try:
             headers = self.get_headers()
-            rw = requests.get(f"{API_BASE}/wheel/status", headers=headers, timeout=10)
+            rw = self.http.get(f"{API_BASE}/wheel/status", headers=headers, timeout=10)
             if rw.status_code == 200:
                 wheel_data = decode_proto(rw.content)
                 can_spin = wheel_data.get(3, False)
                 if can_spin:
                     log("WHEEL", "🎡 Phát hiện lượt quay Lucky Wheel miễn phí! Đang quay...", Fore.CYAN)
+                    old_bal = self.balance
                     nonce = str(int(time.time() * 1000))
                     spin_body = enc_string(1, nonce)
-                    r_spin = requests.post(f"{API_BASE}/wheel/spin", data=spin_body, headers=headers, timeout=10)
+                    r_spin = self.http.post(f"{API_BASE}/wheel/spin", data=spin_body, headers=headers, timeout=10)
                     if r_spin.status_code == 200:
-                        res = decode_proto(r_spin.content)
-                        new_bal = float(res.get(4, self.balance))
-                        if new_bal > self.balance:
-                            log("WHEEL", f"🎉 Quay trúng thưởng USDT! Số dư mới: {new_bal:.4f} USDT", Fore.GREEN)
+                        ok, rw_amt, new_bal, _ = self.parse_claim_response(r_spin.content, old_bal)
+                        if ok:
                             self.balance = new_bal
+                            log("WHEEL", f"🎉 Quay trúng thưởng +{rw_amt:.4f} USDT! Số dư mới: {self.balance:.4f} USDT", Fore.GREEN)
                         else:
-                            log("WHEEL", "✅ Đã hoàn thành lượt quay Lucky Wheel!", Fore.GREEN)
+                            log("WHEEL", "✅ Đã hoàn thành lượt quay Lucky Wheel (Trúng Boost/Lượt xem)!", Fore.GREEN)
         except Exception as e:
             log("WHEEL_ERR", f"Lỗi quay thưởng wheel: {e}", Fore.RED)
 
@@ -627,7 +686,7 @@ class PaidZClient:
         """Tự động kiểm tra và nhận thưởng các nhiệm vụ hệ thống (/tasks) kèm Join -> Out nếu có."""
         try:
             headers = self.get_headers()
-            r = requests.get(f"{API_BASE}/tasks", headers=headers, timeout=10)
+            r = self.http.get(f"{API_BASE}/tasks", headers=headers, timeout=10)
             if r.status_code == 200:
                 data = decode_proto(r.content)
                 tasks = data.get(1, [])
@@ -640,22 +699,23 @@ class PaidZClient:
                         title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2))
                         is_completed = tf.get(11, 0)
                         if not is_completed:
+                            old_bal = self.balance
                             url_str = extract_url_from_proto_fields(tf)
                             joined_entity = None
                             if url_str and ("t.me/" in url_str or "telegram.me/" in url_str):
                                 joined_entity = await tg_join_target(url_str)
-                                await asyncio.sleep(4)
+                                await asyncio.sleep(5)
 
                             req_c = enc_string(1, tid)
-                            r_c = requests.post(f"{API_BASE}/tasks/{tid}/claim", data=req_c, headers=headers, timeout=10)
+                            r_c = self.http.post(f"{API_BASE}/tasks/{tid}/claim", data=req_c, headers=headers, timeout=10)
                             if r_c.status_code == 200:
-                                res = decode_proto(r_c.content)
-                                rw = float(res.get(3, 0.001))
-                                self.balance = float(res.get(4, self.balance + rw))
-                                log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                ok, rw, new_bal, _ = self.parse_claim_response(r_c.content, old_bal)
+                                if ok:
+                                    self.balance = new_bal
+                                    log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
 
                             if joined_entity:
-                                await asyncio.sleep(3)
+                                await asyncio.sleep(4)
                                 await tg_leave_target(joined_entity)
         except Exception as e:
             log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
@@ -664,7 +724,7 @@ class PaidZClient:
         """Tự động làm nhiệm vụ cộng đồng (Join -> Claim -> Out) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ."""
         try:
             headers = self.get_headers()
-            rf = requests.get(f"{API_BASE}/campaigns/feed?page=1&limit=15", headers=headers, timeout=10)
+            rf = self.http.get(f"{API_BASE}/campaigns/feed?page=1&limit=15", headers=headers, timeout=10)
             if rf.status_code == 200:
                 fd = decode_proto(rf.content)
                 c_items = fd.get(1, [])
@@ -701,7 +761,7 @@ class PaidZClient:
         ])
 
         try:
-            r_start = requests.post(f"{API_BASE}/ads/start", data=req_start, headers=self.get_headers(), timeout=12)
+            r_start = self.http.post(f"{API_BASE}/ads/start", data=req_start, headers=self.get_headers(), timeout=12)
             if r_start.status_code != 200:
                 err_data = decode_proto(r_start.content)
                 err_code = err_data.get(5, b'')
@@ -723,7 +783,6 @@ class PaidZClient:
             if not session_token:
                 return False, 5
 
-            # Thời lượng xem tự nhiên (tối ưu hóa nhanh gọn ~5-6s)
             view_seconds = max(min_duration, 4) + round(random.uniform(1.2, 2.2), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
             await asyncio.sleep(view_seconds)
@@ -736,7 +795,7 @@ class PaidZClient:
                 enc_string(4, "")
             ])
 
-            r_watch = requests.post(f"{API_BASE}/ads/watch", data=req_watch, headers=self.get_headers(), timeout=12)
+            r_watch = self.http.post(f"{API_BASE}/ads/watch", data=req_watch, headers=self.get_headers(), timeout=12)
             if r_watch.status_code == 200:
                 w_fields = decode_proto(r_watch.content)
                 reward = float(w_fields.get(2, 0.0))
@@ -780,7 +839,7 @@ async def main_loop():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO PAIDZ ($USDT) 24/7 - CHẾ ĐỘ TÀNG HÌNH ANTI-DETECTION STEALTH
-  Tích hợp Auto Join Telegram -> Claim -> Auto Leave (Out) cho Gate & Task
+  Tích hợp Auto Join Telegram -> Verify Balance -> Auto Leave (Out)
 =============================================================================
     """ + Style.RESET_ALL)
 
@@ -794,7 +853,7 @@ async def main_loop():
         log("MAIN", "Đăng nhập thất bại.", Fore.RED)
         return
 
-    # Khởi động: Mở khóa Gate, quay thưởng Wheel, nhận Daily Check-in & Nhiệm vụ cộng đồng
+    # Khởi động: Mở khóa Gate, quay thưởng Wheel, nhận Nhiệm vụ hệ thống & Nhiệm vụ cộng đồng
     await bot.check_and_unlock_task_gate()
     bot.spin_lucky_wheel()
     await bot.claim_available_tasks()
