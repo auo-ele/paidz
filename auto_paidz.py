@@ -340,60 +340,114 @@ class PaidZClient:
         try:
             headers = self.get_headers()
             r_gate = requests.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
-            if r_gate.status_code == 200:
-                gate_data = decode_proto(r_gate.content)
-                completed = gate_data.get(1, 0)
-                required = gate_data.get(2, 0)
-                raw_items = gate_data.get(4, [])
-                if not isinstance(raw_items, list):
-                    raw_items = [raw_items]
+            if r_gate.status_code != 200:
+                log("GATE_ERR", f"Không thể lấy thông tin Gate (HTTP {r_gate.status_code})", Fore.RED)
+                return False
 
-                if completed < required and raw_items:
-                    log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Tiến hành tự động vượt rào...", Fore.YELLOW)
-                    for it in raw_items:
-                        if isinstance(it, bytes):
-                            tf = decode_proto(it)
-                            cid = tf.get(1, b'').decode('utf-8', errors='ignore')
-                            title = tf.get(2, b'').decode('utf-8', errors='ignore')
-                            
-                            log("GATE", f"▶️ Bắt đầu nhiệm vụ Gate: '{title}' ({cid})...", Fore.CYAN)
-                            requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                            # Bắt đầu Gate, lấy thời gian chờ động nếu có
-                            r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                            wait_sec = 22
-                            if r_start.status_code == 200:
-                                start_data = decode_proto(r_start.content)
-                                wait_sec = int(start_data.get(5, wait_sec))
-                            wait_sec = max(10, min(wait_sec, 30))
-                            time.sleep(wait_sec)
+            gate_data = decode_proto(r_gate.content)
+            completed = gate_data.get(1, 0)
+            required = gate_data.get(2, 0)
+            raw_items = gate_data.get(4, [])
+            if not isinstance(raw_items, list):
+                raw_items = [raw_items]
 
-                            # Claim với retry tối đa 2 lần
-                            claim_headers = headers.copy()
-                            claim_headers['Content-Type'] = 'application/json'
-                            for attempt in range(2):
-                                r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_headers, json={}, timeout=10)
-                                if r_c.status_code == 200:
-                                    res = decode_proto(r_c.content)
-                                    rw = float(res.get(3, 0.001))
-                                    self.balance = float(res.get(4, self.balance + rw))
-                                    log("GATE", f"🎉 Mở khóa thành công: '{title}' | Nhận: +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                                    break
-                                else:
-                                    log("GATE_ERR", f"Attempt {attempt+1} claim failed {r_c.status_code}", Fore.YELLOW)
-                                    time.sleep(3)
+            if completed >= required:
+                log("GATE", f"✅ Gate đã hoàn thành ({completed}/{required}), không cần mở khóa.", Fore.GREEN)
+                return False
 
-                            claim_headers = headers.copy()
-                            claim_headers['Content-Type'] = 'application/json'
-                            r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_headers, json={}, timeout=10)
-                            if r_c.status_code == 200:
-                                res = decode_proto(r_c.content)
-                                rw = float(res.get(3, 0.001))
-                                self.balance = float(res.get(4, self.balance + rw))
-                                log("GATE", f"🎉 Mở khóa thành công: '{title}' | Nhận: +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                                break
+            if not raw_items:
+                log("GATE", f"⚠️ Gate ({completed}/{required}) nhưng không có nhiệm vụ nào.", Fore.YELLOW)
+                return False
+
+            log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Tiến hành tự động vượt rào...", Fore.YELLOW)
+
+            for it in raw_items:
+                if not isinstance(it, bytes):
+                    continue
+
+                tf = decode_proto(it)
+                cid = tf.get(1, b'').decode('utf-8', errors='ignore')
+                title = tf.get(2, b'').decode('utf-8', errors='ignore')
+                # Lấy URL nhiệm vụ nếu có (field 3 hoặc 4)
+                task_url = b''
+                for fld in [3, 4, 5]:
+                    raw_url = tf.get(fld, b'')
+                    if isinstance(raw_url, bytes) and (b'http' in raw_url or b't.me' in raw_url):
+                        task_url = raw_url
+                        break
+
+                log("GATE", f"▶️ Bắt đầu nhiệm vụ Gate: '{title}' ({cid})...", Fore.CYAN)
+
+                # Bước 1: Gọi start (chỉ 1 lần)
+                r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+                if r_start.status_code != 200:
+                    log("GATE_ERR", f"Start gate '{title}' thất bại (HTTP {r_start.status_code})", Fore.YELLOW)
+                    continue
+
+                # Bước 2: Nếu có URL, giả lập truy cập URL
+                if task_url:
+                    url_str = task_url.decode('utf-8', errors='ignore')
+                    log("GATE", f"🔗 Truy cập URL nhiệm vụ: {url_str[:60]}...", Fore.CYAN)
+                    try:
+                        requests.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
+                    except Exception:
+                        pass  # Không cần kết quả, chỉ cần server ghi nhận
+
+                # Bước 3: Chờ đủ thời gian (22s mặc định, đọc từ server nếu có)
+                start_data = decode_proto(r_start.content)
+                wait_sec = int(start_data.get(5, 22))
+                wait_sec = max(15, min(wait_sec, 35))
+                log("GATE", f"⏳ Chờ {wait_sec}s để hoàn thành nhiệm vụ...", Fore.CYAN)
+                time.sleep(wait_sec)
+
+                # Bước 4: Claim bằng protobuf (giống cách tasks/claim hoạt động)
+                claim_body = enc_string(1, cid)
+                claimed = False
+                for attempt in range(3):
+                    r_c = requests.post(
+                        f"{API_BASE}/campaigns/{cid}/claim",
+                        data=claim_body,
+                        headers=headers,
+                        timeout=10
+                    )
+                    if r_c.status_code == 200:
+                        res = decode_proto(r_c.content)
+                        rw = float(res.get(3, 0.001))
+                        self.balance = float(res.get(4, self.balance + rw))
+                        log("GATE", f"🎉 Mở khóa thành công: '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                        claimed = True
+                        break
+                    elif r_c.status_code == 400:
+                        # Thử claim bằng JSON nếu protobuf thất bại
+                        log("GATE", f"⚠️ Claim protobuf thất bại, thử JSON (lần {attempt+1})...", Fore.YELLOW)
+                        claim_h2 = headers.copy()
+                        claim_h2['Content-Type'] = 'application/json'
+                        r_c2 = requests.post(
+                            f"{API_BASE}/campaigns/{cid}/claim",
+                            headers=claim_h2,
+                            json={},
+                            timeout=10
+                        )
+                        if r_c2.status_code == 200:
+                            res = decode_proto(r_c2.content)
+                            rw = float(res.get(3, 0.001))
+                            self.balance = float(res.get(4, self.balance + rw))
+                            log("GATE", f"🎉 Mở khóa thành công (JSON): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                            claimed = True
+                            break
+                        else:
+                            log("GATE_ERR", f"Claim JSON cũng thất bại (HTTP {r_c2.status_code}): {r_c2.text[:100]}", Fore.RED)
+                            # Chờ thêm rồi thử lại
+                            time.sleep(5)
+                    else:
+                        log("GATE_ERR", f"Claim lần {attempt+1} thất bại (HTTP {r_c.status_code})", Fore.YELLOW)
+                        time.sleep(5)
+
+                if claimed:
                     return True
-                elif completed >= required:
-                    return False
+
+            return True
+
         except Exception as e:
             log("GATE_ERR", f"Lỗi xử lý Task Gate: {e}", Fore.RED)
         return False
