@@ -1,34 +1,43 @@
-name: Telegram Auto Claim
+name: Auto PaidZ ($USDT) 24/7 - Acc 4 (Wind_trader)
 
 on:
-  workflow_dispatch: # Cho phép bấm chạy thủ công bằng tay bất cứ lúc nào
+  workflow_dispatch:
   schedule:
-    # Lịch chạy tự động vào 00:05 UTC mỗi ngày (tức là 07:05 sáng giờ Việt Nam)
-    # Hoặc nếu bạn muốn đúng 00:00 giờ Việt Nam (UTC+7), hãy chỉnh thành: '0 17 * * *' (17:00 UTC = 00:00 VN)
-    - cron: '0 17 * * *'
+    - cron: '25 */5 * * *'
+
+concurrency:
+  group: paidz-acc4-run
+  cancel-in-progress: true
 
 jobs:
-  run-claim:
+  run-paidz:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
 
     steps:
-      - name: Checkout mã nguồn
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cài đặt Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Cài đặt thư viện phụ thuộc
+      - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install telethon requests colorama
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install telethon requests colorama; fi
 
-      - name: Chạy script Auto PaidZ
+      - name: Chay Auto PaidZ Stealth 24/7 (Acc 4 - Wind_trader)
         env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          GITHUB_REPOSITORY: "auo-ele/paidz"
+          WORKFLOW_FILE: "paidz_acc4.yml"
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_STRING_SESSION: ${{ secrets.TELEGRAM_STRING_SESSION }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          MAX_RUNTIME_SECONDS: "17500"
         run: |
           python auto_paidz.py
