@@ -358,7 +358,29 @@ class PaidZClient:
                             
                             log("GATE", f"▶️ Bắt đầu nhiệm vụ Gate: '{title}' ({cid})...", Fore.CYAN)
                             requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                            time.sleep(22)  # Chờ 22s theo chuẩn quy định máy chủ
+                            # Bắt đầu Gate, lấy thời gian chờ động nếu có
+                            r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+                            wait_sec = 22
+                            if r_start.status_code == 200:
+                                start_data = decode_proto(r_start.content)
+                                wait_sec = int(start_data.get(5, wait_sec))
+                            wait_sec = max(10, min(wait_sec, 30))
+                            time.sleep(wait_sec)
+
+                            # Claim với retry tối đa 2 lần
+                            claim_headers = headers.copy()
+                            claim_headers['Content-Type'] = 'application/json'
+                            for attempt in range(2):
+                                r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_headers, json={}, timeout=10)
+                                if r_c.status_code == 200:
+                                    res = decode_proto(r_c.content)
+                                    rw = float(res.get(3, 0.001))
+                                    self.balance = float(res.get(4, self.balance + rw))
+                                    log("GATE", f"🎉 Mở khóa thành công: '{title}' | Nhận: +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                    break
+                                else:
+                                    log("GATE_ERR", f"Attempt {attempt+1} claim failed {r_c.status_code}", Fore.YELLOW)
+                                    time.sleep(3)
 
                             claim_headers = headers.copy()
                             claim_headers['Content-Type'] = 'application/json'
@@ -649,8 +671,9 @@ async def main_loop():
             # NGHỈ MỆT TỰ NHIÊN (ANTI-FATIGUE CHECK):
             # Cứ xem 5 đến 7 quảng cáo liên tiếp -> Nghỉ nhanh 30 - 50 giây theo yêu cầu của bạn
             if ads_session_count >= random.randint(5, 7):
-                rest_seconds = round(random.uniform(30.0, 50.0), 1)
-                log("REST", f"☕ Mô phỏng người dùng nghỉ mệt {rest_seconds}s (Anti-Fatigue)...", Fore.MAGENTA)
+                # Nghỉ ngắn 10‑20 s để giảm fatigue
+                rest_seconds = round(random.uniform(10.0, 20.0), 1)
+                log("REST", f"☕ Nghỉ ngắn {rest_seconds}s (Anti‑Fatigue)...", Fore.MAGENTA)
                 time.sleep(rest_seconds)
                 ads_session_count = 0
             else:
