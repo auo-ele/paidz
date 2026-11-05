@@ -7,21 +7,22 @@
   Telegram Bot: @paidzapp (Short name: 'start')
   Account: Acc 4 - Wind_trader (UID: 8735204819)
   
-  TÍNH NĂNG TÀNG HÌNH & TỐI ƯU HÓA ĐỘT PHÁ:
+  TÍNH NĂNG TÀNG HÌNH & TỐI ƯU HÓA ĐỘT PHÁ (BẢN NÂNG CẤP AUTO JOIN -> CLAIM -> OUT):
     1. Giả lập chữ ký thiết bị Android 14 (Samsung S24 Ultra, GPU Adreno 750).
     2. Giao thức nhị phân Protobuf chuẩn 100% khớp webapp (Telemetry đầy đủ).
     3. Tự động quét và né 100% các bẫy Honeypot ngầm (chống ban).
-    4. Tự động giải mã và vượt rào Task Gate (/campaigns/gate) nhận thêm USDT.
+    4. Tự động giải mã Task Gate & Community Campaigns:
+       -> Tự động JOIN kênh/nhóm Telegram (hoặc /start bot) -> Chờ -> CLAIM -> Tự động OUT (rời kênh).
     5. Tự động làm nhiệm vụ điểm danh hàng ngày (Daily Check-in) & Vòng quay may mắn (Lucky Wheel).
-    6. Tự động làm nhiệm vụ cộng đồng (Community Campaigns) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ.
-    7. Ưu tiên xem các mạng QC thưởng cao nhất (0.0002 USDT/lượt).
-    8. Tối ưu thời gian nghỉ mệt siêu tốc 30 - 50 giây (Anti-Fatigue) theo yêu cầu.
-    9. Giãn cách an toàn 5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST.
-    10. Tự động bàn giao ca trực 24/7 sau 4.8h (GitHub Actions Handover).
+    6. Ưu tiên xem các mạng QC thưởng cao nhất (0.0002 USDT/lượt).
+    7. Tối ưu thời gian nghỉ mệt siêu tốc (Anti-Fatigue).
+    8. Giãn cách an toàn 5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST.
+    9. Tự động bàn giao ca trực 24/7 sau 4.8h (GitHub Actions Handover).
 =============================================================================
 """
 
 import os
+import re
 import sys
 import time
 import json
@@ -34,7 +35,9 @@ import requests
 from colorama import init, Fore, Style
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.functions.messages import RequestAppWebViewRequest
+from telethon.errors import FloodWaitError, UserAlreadyParticipantError, InviteHashExpiredError
+from telethon.tl.functions.messages import RequestAppWebViewRequest, ImportChatInviteRequest, DeleteChatUserRequest
+from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.types import InputBotAppShortName
 
 init(autoreset=True)
@@ -156,6 +159,125 @@ def decode_proto(data):
 def log(tag, msg, color=Fore.WHITE):
     t_str = time.strftime('%H:%M:%S')
     print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:10s}]{Style.RESET_ALL} {msg}", flush=True)
+
+# -----------------------------------------------------------------
+# HÀM HỖ TRỢ TELEGRAM: AUTO JOIN & AUTO LEAVE (OUT)
+# -----------------------------------------------------------------
+def extract_url_from_proto_fields(tf):
+    """Quét mọi trường protobuf để tìm URL nhiệm vụ (t.me hoặc http)."""
+    for fld, val in tf.items():
+        items = val if isinstance(val, list) else [val]
+        for item in items:
+            if isinstance(item, bytes):
+                s = item.decode('utf-8', errors='ignore').strip()
+                if "t.me/" in s or "telegram.me/" in s or s.startswith("http"):
+                    return s
+                if s.startswith("@") and len(s) > 3 and " " not in s:
+                    return f"https://t.me/{s[1:]}"
+    return ""
+
+async def tg_join_target(url: str):
+    """
+    Tự động tham gia Channel/Group hoặc gửi /start cho Bot từ URL nhiệm vụ.
+    Trả về đối tượng entity đã tham gia để lát nữa gọi hàm Leave (Out).
+    """
+    if not url or ("t.me/" not in url and "telegram.me/" not in url):
+        return None
+
+    client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    joined_entity = None
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            return None
+
+        parsed = urllib.parse.urlparse(url)
+        path = parsed.path.strip("/")
+        query = urllib.parse.parse_qs(parsed.query)
+
+        # Trường hợp 1: Link invite riêng tư (t.me/+xxxx hoặc t.me/joinchat/xxxx)
+        invite_hash = None
+        if path.startswith("+"):
+            invite_hash = path[1:]
+        elif path.startswith("joinchat/"):
+            invite_hash = path.split("joinchat/")[1]
+
+        if invite_hash:
+            invite_hash = invite_hash.split("/")[0].split("?")[0]
+            log("TG_JOIN", f"➕ Đang tham gia nhóm riêng tư (Invite: {invite_hash[:10]}...)...", Fore.CYAN)
+            try:
+                updates = await client(ImportChatInviteRequest(invite_hash))
+                if hasattr(updates, "chats") and updates.chats:
+                    joined_entity = updates.chats[0]
+                    log("TG_JOIN", f"✅ Đã tham gia nhóm riêng tư thành công!", Fore.GREEN)
+            except UserAlreadyParticipantError:
+                log("TG_JOIN", "ℹ️ Tài khoản đã ở trong nhóm riêng tư này từ trước.", Fore.CYAN)
+                try:
+                    joined_entity = await client.get_entity(url)
+                except Exception:
+                    pass
+            except InviteHashExpiredError:
+                log("TG_JOIN", "⚠️ Link invite đã hết hạn!", Fore.YELLOW)
+            return joined_entity
+
+        # Trường hợp 2: Username công khai (Channel, Group hoặc Bot)
+        username = path.split("/")[0].replace("@", "")
+        if not username:
+            return None
+
+        entity = await client.get_entity(username)
+
+        # Nếu mục tiêu là Bot -> Gửi tin nhắn /start kèm tham số (nếu có)
+        if getattr(entity, "bot", False):
+            start_param = query.get("start", [query.get("startapp", [""])[0]])[0]
+            cmd = f"/start {start_param}".strip()
+            log("TG_BOT", f"🤖 Đang gửi lệnh '{cmd}' tới bot @{username}...", Fore.CYAN)
+            await client.send_message(entity, cmd)
+            # Với bot thì không cần leavechannel, trả về None
+            return None
+        else:
+            # Nếu là Channel hoặc Supergroup -> Bấm Join
+            log("TG_JOIN", f"➕ Đang tham gia kênh/nhóm @{username}...", Fore.CYAN)
+            try:
+                await client(JoinChannelRequest(entity))
+                log("TG_JOIN", f"✅ Đã tham gia @{username} thành công!", Fore.GREEN)
+            except UserAlreadyParticipantError:
+                log("TG_JOIN", f"ℹ️ Đã tham gia @{username} từ trước.", Fore.CYAN)
+            return entity
+
+    except FloodWaitError as e:
+        log("TG_FLOOD", f"⏳ Telegram giới hạn tốc độ Join, cần chờ {e.seconds}s...", Fore.YELLOW)
+    except Exception as e:
+        log("TG_JOIN_ERR", f"⚠️ Không thể tự động Join '{url}': {e}", Fore.YELLOW)
+    finally:
+        await client.disconnect()
+
+    return joined_entity
+
+async def tg_leave_target(entity):
+    """Tự động rời khỏi Channel/Group sau khi đã Claim thưởng thành công."""
+    if not entity:
+        return
+
+    client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            return
+
+        title = getattr(entity, "title", None) or getattr(entity, "username", "Kênh/Nhóm")
+        log("TG_LEAVE", f"🚪 Đang rời khỏi (Out) '{title}'...", Fore.MAGENTA)
+        try:
+            await client(LeaveChannelRequest(entity))
+            log("TG_LEAVE", f"✅ Đã rời khỏi '{title}' thành công!", Fore.GREEN)
+        except Exception:
+            # Dự phòng cho nhóm thường (Basic chat group)
+            await client.delete_dialog(entity)
+            log("TG_LEAVE", f"✅ Đã xóa/rời hội thoại '{title}' thành công!", Fore.GREEN)
+    except Exception as e:
+        log("TG_LEAVE_ERR", f"⚠️ Lỗi khi rời kênh: {e}", Fore.YELLOW)
+    finally:
+        await client.disconnect()
 
 # -----------------------------------------------------------------
 # CLIENT PAIDZ TÀNG HÌNH (STEALTH ENGINE)
@@ -335,8 +457,98 @@ class PaidZClient:
             log("NETWORKS_ERR", f"Lỗi lấy danh sách ads: {e}", Fore.RED)
         return []
 
-    def check_and_unlock_task_gate(self):
-        """Tự động kiểm tra và mở khóa Task Gate nếu bị dừng xem quảng cáo."""
+    async def execute_campaign_flow(self, cid: str, title: str, url_str: str, tag_name="GATE"):
+        """
+        Quy trình khép kín cho 1 chiến dịch (Gate hoặc Community Campaign):
+        1. Gọi /start trên PaidZ
+        2. Nếu là link Telegram -> Tự động JOIN (hoặc /start bot)
+        3. Đợi đủ thời gian yêu cầu
+        4. Gọi /claim (Thử Protobuf & JSON)
+        5. Tự động LEAVE (Out) khỏi kênh Telegram vừa tham gia
+        """
+        headers = self.get_headers()
+        log(tag_name, f"▶️ Bắt đầu nhiệm vụ: '{title}' ({cid})...", Fore.CYAN)
+
+        # Bước 1: Gọi start nhiệm vụ trên máy chủ PaidZ
+        r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+        if r_start.status_code != 200:
+            log(f"{tag_name}_ERR", f"Start '{title}' thất bại (HTTP {r_start.status_code})", Fore.YELLOW)
+            return False
+
+        start_data = decode_proto(r_start.content)
+        # Nếu trong start_data trả về link URL động thì ưu tiên lấy thêm
+        if not url_str:
+            url_str = extract_url_from_proto_fields(start_data)
+
+        joined_entity = None
+
+        # Bước 2: Tương tác thực tế với URL (Tự động Join Telegram hoặc mở Web)
+        if url_str:
+            log(tag_name, f"🔗 Mục tiêu nhiệm vụ: {url_str[:65]}", Fore.CYAN)
+            if "t.me/" in url_str or "telegram.me/" in url_str:
+                joined_entity = await tg_join_target(url_str)
+            else:
+                try:
+                    requests.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
+                except Exception:
+                    pass
+
+        # Bước 3: Chờ đủ thời gian trước khi bấm Claim
+        wait_sec = int(start_data.get(5, 22))
+        wait_sec = max(16, min(wait_sec, 35))
+        log(tag_name, f"⏳ Đang chờ {wait_sec}s để hệ thống xác nhận...", Fore.CYAN)
+        await asyncio.sleep(wait_sec)
+
+        # Bước 4: Gửi yêu cầu Claim thưởng
+        claimed = False
+        claim_body = enc_string(1, cid)
+
+        for attempt in range(3):
+            # Thử phương thức 1: Protobuf (có body cid)
+            r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", data=claim_body, headers=headers, timeout=10)
+            if r_c.status_code == 200:
+                res = decode_proto(r_c.content)
+                rw = float(res.get(3, 0.001))
+                self.balance = float(res.get(4, self.balance + rw))
+                log(tag_name, f"🎉 Claim thành công: '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                claimed = True
+                break
+
+            # Thử phương thức 2: Protobuf rỗng (một số endpoint POST không nhận body)
+            r_c_empty = requests.post(f"{API_BASE}/campaigns/{cid}/claim", data=b"", headers=headers, timeout=10)
+            if r_c_empty.status_code == 200:
+                res = decode_proto(r_c_empty.content)
+                rw = float(res.get(3, 0.001))
+                self.balance = float(res.get(4, self.balance + rw))
+                log(tag_name, f"🎉 Claim thành công (Empty Proto): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                claimed = True
+                break
+
+            # Thử phương thức 3: JSON
+            claim_h2 = headers.copy()
+            claim_h2['Content-Type'] = 'application/json'
+            r_c2 = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_h2, json={}, timeout=10)
+            if r_c2.status_code == 200:
+                res = decode_proto(r_c2.content)
+                rw = float(res.get(3, 0.001))
+                self.balance = float(res.get(4, self.balance + rw))
+                log(tag_name, f"🎉 Claim thành công (JSON): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                claimed = True
+                break
+
+            err_info = decode_proto(r_c.content)
+            log(f"{tag_name}_WARN", f"Claim lần {attempt+1} chưa được (HTTP {r_c.status_code}): {err_info} -> Chờ 5s thử lại...", Fore.YELLOW)
+            await asyncio.sleep(5)
+
+        # Bước 5: Chờ 3s an toàn rồi tự động RỜI KÊNH (OUT)
+        if joined_entity:
+            await asyncio.sleep(3)
+            await tg_leave_target(joined_entity)
+
+        return claimed
+
+    async def check_and_unlock_task_gate(self):
+        """Tự động kiểm tra và mở khóa Task Gate (Join -> Claim -> Out)."""
         try:
             headers = self.get_headers()
             r_gate = requests.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
@@ -351,102 +563,37 @@ class PaidZClient:
             if not isinstance(raw_items, list):
                 raw_items = [raw_items]
 
-            if completed >= required:
+            if completed >= required and required > 0:
                 log("GATE", f"✅ Gate đã hoàn thành ({completed}/{required}), không cần mở khóa.", Fore.GREEN)
                 return False
 
             if not raw_items:
-                log("GATE", f"⚠️ Gate ({completed}/{required}) nhưng không có nhiệm vụ nào.", Fore.YELLOW)
                 return False
 
-            log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Tiến hành tự động vượt rào...", Fore.YELLOW)
+            log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Tiến hành tự động Join -> Claim -> Out...", Fore.YELLOW)
 
+            unlocked_any = False
             for it in raw_items:
                 if not isinstance(it, bytes):
                     continue
 
                 tf = decode_proto(it)
-                cid = tf.get(1, b'').decode('utf-8', errors='ignore')
-                title = tf.get(2, b'').decode('utf-8', errors='ignore')
-                # Lấy URL nhiệm vụ nếu có (field 3 hoặc 4)
-                task_url = b''
-                for fld in [3, 4, 5]:
-                    raw_url = tf.get(fld, b'')
-                    if isinstance(raw_url, bytes) and (b'http' in raw_url or b't.me' in raw_url):
-                        task_url = raw_url
-                        break
+                cid = tf.get(1, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(1), bytes) else str(tf.get(1, ''))
+                title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2, ''))
+                url_str = extract_url_from_proto_fields(tf)
 
-                log("GATE", f"▶️ Bắt đầu nhiệm vụ Gate: '{title}' ({cid})...", Fore.CYAN)
-
-                # Bước 1: Gọi start (chỉ 1 lần)
-                r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                if r_start.status_code != 200:
-                    log("GATE_ERR", f"Start gate '{title}' thất bại (HTTP {r_start.status_code})", Fore.YELLOW)
+                if not cid:
                     continue
 
-                # Bước 2: Nếu có URL, giả lập truy cập URL
-                if task_url:
-                    url_str = task_url.decode('utf-8', errors='ignore')
-                    log("GATE", f"🔗 Truy cập URL nhiệm vụ: {url_str[:60]}...", Fore.CYAN)
-                    try:
-                        requests.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
-                    except Exception:
-                        pass  # Không cần kết quả, chỉ cần server ghi nhận
-
-                # Bước 3: Chờ đủ thời gian (22s mặc định, đọc từ server nếu có)
-                start_data = decode_proto(r_start.content)
-                wait_sec = int(start_data.get(5, 22))
-                wait_sec = max(15, min(wait_sec, 35))
-                log("GATE", f"⏳ Chờ {wait_sec}s để hoàn thành nhiệm vụ...", Fore.CYAN)
-                time.sleep(wait_sec)
-
-                # Bước 4: Claim bằng protobuf (giống cách tasks/claim hoạt động)
-                claim_body = enc_string(1, cid)
-                claimed = False
-                for attempt in range(3):
-                    r_c = requests.post(
-                        f"{API_BASE}/campaigns/{cid}/claim",
-                        data=claim_body,
-                        headers=headers,
-                        timeout=10
-                    )
-                    if r_c.status_code == 200:
-                        res = decode_proto(r_c.content)
-                        rw = float(res.get(3, 0.001))
-                        self.balance = float(res.get(4, self.balance + rw))
-                        log("GATE", f"🎉 Mở khóa thành công: '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                        claimed = True
+                ok = await self.execute_campaign_flow(cid, title, url_str, tag_name="GATE")
+                if ok:
+                    unlocked_any = True
+                    completed += 1
+                    if required > 0 and completed >= required:
+                        log("GATE", f"✅ Đã mở khóa đủ yêu cầu Task Gate ({completed}/{required})!", Fore.GREEN)
                         break
-                    elif r_c.status_code == 400:
-                        # Thử claim bằng JSON nếu protobuf thất bại
-                        log("GATE", f"⚠️ Claim protobuf thất bại, thử JSON (lần {attempt+1})...", Fore.YELLOW)
-                        claim_h2 = headers.copy()
-                        claim_h2['Content-Type'] = 'application/json'
-                        r_c2 = requests.post(
-                            f"{API_BASE}/campaigns/{cid}/claim",
-                            headers=claim_h2,
-                            json={},
-                            timeout=10
-                        )
-                        if r_c2.status_code == 200:
-                            res = decode_proto(r_c2.content)
-                            rw = float(res.get(3, 0.001))
-                            self.balance = float(res.get(4, self.balance + rw))
-                            log("GATE", f"🎉 Mở khóa thành công (JSON): '{title}' | +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                            claimed = True
-                            break
-                        else:
-                            log("GATE_ERR", f"Claim JSON cũng thất bại (HTTP {r_c2.status_code}): {r_c2.text[:100]}", Fore.RED)
-                            # Chờ thêm rồi thử lại
-                            time.sleep(5)
-                    else:
-                        log("GATE_ERR", f"Claim lần {attempt+1} thất bại (HTTP {r_c.status_code})", Fore.YELLOW)
-                        time.sleep(5)
 
-                if claimed:
-                    return True
-
-            return True
+            return unlocked_any
 
         except Exception as e:
             log("GATE_ERR", f"Lỗi xử lý Task Gate: {e}", Fore.RED)
@@ -476,8 +623,8 @@ class PaidZClient:
         except Exception as e:
             log("WHEEL_ERR", f"Lỗi quay thưởng wheel: {e}", Fore.RED)
 
-    def claim_available_tasks(self):
-        """Tự động kiểm tra và nhận thưởng các nhiệm vụ hệ thống (/tasks)."""
+    async def claim_available_tasks(self):
+        """Tự động kiểm tra và nhận thưởng các nhiệm vụ hệ thống (/tasks) kèm Join -> Out nếu có."""
         try:
             headers = self.get_headers()
             r = requests.get(f"{API_BASE}/tasks", headers=headers, timeout=10)
@@ -493,6 +640,12 @@ class PaidZClient:
                         title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2))
                         is_completed = tf.get(11, 0)
                         if not is_completed:
+                            url_str = extract_url_from_proto_fields(tf)
+                            joined_entity = None
+                            if url_str and ("t.me/" in url_str or "telegram.me/" in url_str):
+                                joined_entity = await tg_join_target(url_str)
+                                await asyncio.sleep(4)
+
                             req_c = enc_string(1, tid)
                             r_c = requests.post(f"{API_BASE}/tasks/{tid}/claim", data=req_c, headers=headers, timeout=10)
                             if r_c.status_code == 200:
@@ -500,11 +653,15 @@ class PaidZClient:
                                 rw = float(res.get(3, 0.001))
                                 self.balance = float(res.get(4, self.balance + rw))
                                 log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+
+                            if joined_entity:
+                                await asyncio.sleep(3)
+                                await tg_leave_target(joined_entity)
         except Exception as e:
             log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
 
-    def claim_community_campaigns(self):
-        """Tự động làm nhiệm vụ cộng đồng (Community Campaigns) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ."""
+    async def claim_community_campaigns(self):
+        """Tự động làm nhiệm vụ cộng đồng (Join -> Claim -> Out) kiếm thêm 0.0005 - 0.002 USDT/nhiệm vụ."""
         try:
             headers = self.get_headers()
             rf = requests.get(f"{API_BASE}/campaigns/feed?page=1&limit=15", headers=headers, timeout=10)
@@ -519,32 +676,18 @@ class PaidZClient:
                         f = decode_proto(it)
                         cid = f.get(1, b'').decode('utf-8', errors='ignore') if isinstance(f.get(1), bytes) else str(f.get(1))
                         title = f.get(2, b'').decode('utf-8', errors='ignore') if isinstance(f.get(2), bytes) else str(f.get(2))
+                        url_str = extract_url_from_proto_fields(f)
                         
-                        if cid in self.claimed_campaign_ids:
+                        if not cid or cid in self.claimed_campaign_ids:
                             continue
 
-                        log("CAMPAIGN", f"📋 Bắt đầu làm nhiệm vụ cộng đồng: '{title}' ({cid})...", Fore.CYAN)
-                        r_start = requests.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
-                        if r_start.status_code == 200:
-                            time.sleep(22)
-                            claim_headers = headers.copy()
-                            claim_headers['Content-Type'] = 'application/json'
-                            r_c = requests.post(f"{API_BASE}/campaigns/{cid}/claim", headers=claim_headers, json={}, timeout=10)
-                            if r_c.status_code == 200:
-                                res_p = decode_proto(r_c.content)
-                                rw = float(res_p.get(3, 0.0005))
-                                self.balance = float(res_p.get(4, self.balance + rw))
-                                log("CAMPAIGN", f"🎉 Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
-                                self.claimed_campaign_ids.add(cid)
-                                time.sleep(5)
-                            else:
-                                self.claimed_campaign_ids.add(cid)
-                        else:
-                            self.claimed_campaign_ids.add(cid)
+                        await self.execute_campaign_flow(cid, title, url_str, tag_name="CAMPAIGN")
+                        self.claimed_campaign_ids.add(cid)
+                        await asyncio.sleep(4)
         except Exception as e:
             log("CAMPAIGN_ERR", f"Lỗi nhiệm vụ cộng đồng: {e}", Fore.RED)
 
-    def watch_ad_stealth(self, network_name):
+    async def watch_ad_stealth(self, network_name):
         rel_x = round(random.uniform(0.35, 0.68), 4)
         rel_y = round(random.uniform(0.42, 0.62), 4)
 
@@ -564,9 +707,9 @@ class PaidZClient:
                 err_code = err_data.get(5, b'')
                 err_msg = err_data.get(6, b'')
                 
-                # Nếu bị Task Gate chặn -> Tự động giải mã vượt rào ngay
+                # Nếu bị Task Gate chặn -> Tự động Join -> Claim -> Out để vượt rào ngay
                 if b'TASK_GATE_REQUIRED' in err_code or b'TASK_GATE' in err_msg:
-                    self.check_and_unlock_task_gate()
+                    await self.check_and_unlock_task_gate()
                     return False, 3
 
                 log("AD_START_WARN", f"Không thể bắt đầu ca xem ({network_name}): {err_code} - {err_msg}", Fore.YELLOW)
@@ -583,7 +726,7 @@ class PaidZClient:
             # Thời lượng xem tự nhiên (tối ưu hóa nhanh gọn ~5-6s)
             view_seconds = max(min_duration, 4) + round(random.uniform(1.2, 2.2), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
-            time.sleep(view_seconds)
+            await asyncio.sleep(view_seconds)
 
             duration_ms = view_seconds * 1000.0
             req_watch = b"".join([
@@ -631,13 +774,13 @@ def trigger_next_shift():
     return False
 
 # -----------------------------------------------------------------
-# VÒNG LẶP CHÍNH 24/7 VỚI ĐIỀU PHỐI ƯU TIÊN & NGHỈ SIÊU TỐC 30 - 50 GIÂY
+# VÒNG LẶP CHÍNH 24/7 VỚI ĐIỀU PHỐI ƯU TIÊN & AUTO JOIN-CLAIM-OUT
 # -----------------------------------------------------------------
 async def main_loop():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO PAIDZ ($USDT) 24/7 - CHẾ ĐỘ TÀNG HÌNH ANTI-DETECTION STEALTH
-  Tối ưu hóa tốc độ cao & Nghỉ siêu tốc 30-50s & Tự động làm mọi nhiệm vụ
+  Tích hợp Auto Join Telegram -> Claim -> Auto Leave (Out) cho Gate & Task
 =============================================================================
     """ + Style.RESET_ALL)
 
@@ -651,11 +794,11 @@ async def main_loop():
         log("MAIN", "Đăng nhập thất bại.", Fore.RED)
         return
 
-    # Khởi động: Mở khóa Gate, quay thưởng Wheel, nhận Daily Check-in & Nhiệm vụ
-    bot.check_and_unlock_task_gate()
+    # Khởi động: Mở khóa Gate, quay thưởng Wheel, nhận Daily Check-in & Nhiệm vụ cộng đồng
+    await bot.check_and_unlock_task_gate()
     bot.spin_lucky_wheel()
-    bot.claim_available_tasks()
-    bot.claim_community_campaigns()
+    await bot.claim_available_tasks()
+    await bot.claim_community_campaigns()
 
     start_time = time.time()
     last_refresh_time = time.time()
@@ -676,19 +819,18 @@ async def main_loop():
                 new_init = await bot.fetch_tg_init_data()
                 if new_init:
                     bot.authenticate(new_init)
-                    bot.check_and_unlock_task_gate()
+                    await bot.check_and_unlock_task_gate()
                     last_refresh_time = time.time()
 
             # Quét nhiệm vụ mới mỗi 60 phút
             if (time.time() - last_task_check_time) >= 3600:
-                bot.claim_available_tasks()
-                bot.claim_community_campaigns()
+                await bot.claim_available_tasks()
+                await bot.claim_community_campaigns()
                 last_task_check_time = time.time()
 
             # Lấy danh sách quảng cáo an toàn (đã lọc sạch Honeypot & S2S)
             networks = bot.fetch_clean_networks()
             if not networks:
-                # Danh sách mặc định các mạng trả thưởng client cao nhất
                 networks = [
                     {"id": "net_gigapub", "name": "gigapub", "reward": 0.0002, "remaining": 70},
                     {"id": "net_tads", "name": "tads", "reward": 0.0002, "remaining": 60},
@@ -699,48 +841,41 @@ async def main_loop():
                 ]
 
             now = time.time()
-            # Lọc các mạng đã hết thời gian cooldown
             ready_nets = [n for n in networks if now >= network_cooldowns.get(n["name"], 0)]
 
             if not ready_nets:
-                # Nếu tất cả mạng đều đang trong cooldown -> Chờ mạng gần nhất
                 wait_time = min(network_cooldowns.values()) - now
                 sleep_t = max(2.0, min(wait_time, 6.0))
-                time.sleep(sleep_t)
+                await asyncio.sleep(sleep_t)
                 continue
 
-            # Ưu tiên các mạng có reward cao nhất (0.0002 USDT/lượt)
             max_rw = max(n["reward"] for n in ready_nets)
             top_tier_nets = [n for n in ready_nets if n["reward"] >= max_rw]
             target_net = random.choice(top_tier_nets)
             net_name = target_net["name"]
 
-            success, cd = bot.watch_ad_stealth(net_name)
-            # Ghi nhớ thời điểm hết cooldown của mạng này
+            success, cd = await bot.watch_ad_stealth(net_name)
             network_cooldowns[net_name] = time.time() + cd
 
             if success:
                 ads_session_count += 1
 
-            # NGHỈ MỆT TỰ NHIÊN (ANTI-FATIGUE CHECK):
-            # Cứ xem 5 đến 7 quảng cáo liên tiếp -> Nghỉ nhanh 30 - 50 giây theo yêu cầu của bạn
+            # NGHỈ MỆT TỰ NHIÊN (ANTI-FATIGUE CHECK)
             if ads_session_count >= random.randint(5, 7):
-                # Nghỉ ngắn 10‑20 s để giảm fatigue
                 rest_seconds = round(random.uniform(10.0, 20.0), 1)
                 log("REST", f"☕ Nghỉ ngắn {rest_seconds}s (Anti‑Fatigue)...", Fore.MAGENTA)
-                time.sleep(rest_seconds)
+                await asyncio.sleep(rest_seconds)
                 ads_session_count = 0
             else:
-                # Giãn cách an toàn giữa 2 lần xem (5.5 - 7.0s chống lỗi AD_WATCH_TOO_FAST / REACTION_TOO_FAST)
                 gap_sleep = round(random.uniform(5.5, 7.0), 1)
-                time.sleep(gap_sleep)
+                await asyncio.sleep(gap_sleep)
 
         except KeyboardInterrupt:
             log("MAIN", "Người dùng dừng chương trình.", Fore.YELLOW)
             break
         except Exception as e:
             log("LOOP_ERR", f"Lỗi vòng lặp: {e}", Fore.RED)
-            time.sleep(10)
+            await asyncio.sleep(10)
 
 if __name__ == '__main__':
     asyncio.run(main_loop())
