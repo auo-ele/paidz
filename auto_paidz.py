@@ -7,14 +7,11 @@
   Telegram Bot: @paidzapp (Short name: 'start')
   Account: Acc 4 - Wind_trader (UID: 8735204819)
   
-  BẢN TỐI ƯU HÓA 100% (ANTI-DEADLOCK GATE + PERSISTENT TELETHON + REAL DB):
-    1. Chống kẹt Deadlock Task Gate: Chỉ tính điểm khi Claim thành công. Nếu
-       toàn bộ nhiệm vụ Gate đều lỗi HTTP 400, tự động khóa Gate lỗi để không
-       bị lặp vô tận mỗi 7 giây.
-    2. Duy trì 1 phiên Telethon duy nhất (Persistent Client) -> Giữ nguyên
-       access_hash, rời kênh chuẩn xác 100% (Verified Leave).
-    3. Tối ưu hóa HTTP Session với Connection Pooling & Auto-Retry.
-    4. Tự động dừng hoàn toàn khi đạt Max Daily Limit, chờ cron 00:00 hôm sau.
+  BẢN TỐI ƯU HÓA 100% (PROTECT OFFICIAL CHANNEL + ANTI-DEADLOCK GATE):
+    1. Bảo vệ kênh chính thức (@PAIDZ_NEWS / ID: 2307369718): Tự động Join
+       nhưng TUYỆT ĐỐI KHÔNG RỜI KÊNH để duy trì điều kiện xem quảng cáo.
+    2. Các kênh nhiệm vụ phụ khác: Tự động Join -> Claim -> Rời kênh 100%.
+    3. Chống kẹt Deadlock Task Gate (HTTP 400) & Tự động dừng khi Max Limit.
 =============================================================================
 """
 
@@ -62,7 +59,7 @@ from telethon.tl.types import (
 init(autoreset=True)
 
 # -----------------------------------------------------------------
-# CẤU HÌNH HỆ THỐNG (Bọc an toàn tuyệt đối chống lỗi ValueError)
+# CẤU HÌNH HỆ THỐNG
 # -----------------------------------------------------------------
 def _safe_int(val, default):
     try:
@@ -86,6 +83,10 @@ REPO_NAME = (os.getenv("GITHUB_REPOSITORY") or "auo-ele/paidz").strip()
 WORKFLOW_FILE = (os.getenv("WORKFLOW_FILE") or "paidz_acc4.yml").strip()
 MAX_RUNTIME_SECONDS = _safe_int(os.getenv("MAX_RUNTIME_SECONDS"), 17500)
 
+# DANH SÁCH KÊNH CHÍNH THỨC BẮT BUỘC GIỮ LẠI (TUYỆT ĐỐI KHÔNG RỜI KÊNH)
+PROTECTED_CHANNEL_IDS = {2307369718}
+PROTECTED_USERNAMES = {"paidz_news", "paidz", "paidzapp", "paidz_chat", "paidz_community"}
+
 # Các mạng QC server-to-server (bắt buộc server postback)
 S2S_NETWORKS = {"adsgram", "usl", "adloop", "onclicka", "adsbitvex"}
 
@@ -100,7 +101,7 @@ FALLBACK_NETWORKS = [
 ]
 
 # -----------------------------------------------------------------
-# PROTOBUF UTILS (NHANH & NHẸ)
+# PROTOBUF UTILS
 # -----------------------------------------------------------------
 def enc_varint(n):
     res = bytearray()
@@ -212,7 +213,6 @@ def extract_url_from_proto_fields(tf):
     return candidates[0] if candidates else ""
 
 def create_resilient_session():
-    """Tạo HTTP Session có Connection Pool và tự động Retry khi mạng chập chờn."""
     session = requests.Session()
     retry_strategy = Retry(
         total=3,
@@ -224,6 +224,22 @@ def create_resilient_session():
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+def is_protected_entity(entity):
+    """Kiểm tra xem kênh/nhóm có thuộc danh sách cấm rời (như @PAIDZ_NEWS) hay không."""
+    if not entity:
+        return False
+    ent_id = getattr(entity, "id", None)
+    ent_username = (getattr(entity, "username", None) or "").lower().strip()
+    ent_title = (getattr(entity, "title", None) or "").lower().strip()
+
+    if ent_id in PROTECTED_CHANNEL_IDS:
+        return True
+    if ent_username in PROTECTED_USERNAMES:
+        return True
+    if "paidz official" in ent_title or "paidz_news" in ent_title:
+        return True
+    return False
 
 # -----------------------------------------------------------------
 # CLIENT PAIDZ & TELETHON TỐI ƯU
@@ -246,7 +262,7 @@ class PaidZClient:
         self.claimed_campaign_ids = set()
         self.exhausted_networks = set()
         self._skipped_gate_cache = set()
-        self.gate_deadlocked_until = 0  # Thời gian tạm ngưng gọi Gate khi toàn bộ Gate bị lỗi HTTP 400
+        self.gate_deadlocked_until = 0
 
         self.tg_client = TelegramClient(
             StringSession(TELEGRAM_STRING_SESSION),
@@ -375,6 +391,12 @@ class PaidZClient:
 
     async def tg_leave_target(self, entity):
         if not entity:
+            return
+
+        # KIỂM TRA BẢO VỆ KÊNH CHÍNH THỨC (@PAIDZ_NEWS / ID: 2307369718)
+        if is_protected_entity(entity):
+            title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
+            log("TG_KEEP", f"🛡️ Giữ nguyên kênh chính thức '{title}' (ID: {getattr(entity, 'id', '')}) - Không rời kênh!", Fore.CYAN)
             return
 
         try:
@@ -667,7 +689,6 @@ class PaidZClient:
                     claimed = True
                 else:
                     log(f"{tag_name}_INFO", f"ℹ️ Đã xử lý '{title}' (Số dư: {self.balance:.4f} USDT): {reason}", Fore.YELLOW)
-                    # Dù không cộng thêm tiền nhưng server trả 200 tức là đã tính tiến độ Gate
                     claimed = True
                 break
             else:
@@ -675,19 +696,15 @@ class PaidZClient:
                 log(f"{tag_name}_WARN", f"Claim lần {attempt+1} lỗi (HTTP {r_c.status_code}): {err_info}", Fore.YELLOW)
                 await asyncio.sleep(4)
 
-        if joined_entity:
+        if joined_entity and not is_protected_entity(joined_entity):
             await asyncio.sleep(4)
+            await self.tg_leave_target(joined_entity)
+        elif joined_entity:
             await self.tg_leave_target(joined_entity)
 
         return claimed
 
     async def check_and_unlock_task_gate(self):
-        """
-        Tự động kiểm tra và mở khóa Task Gate.
-        Trả về:
-          - True: Đã mở khóa thành công ít nhất 1 nhiệm vụ.
-          - False: Không cần mở hoặc toàn bộ nhiệm vụ trong Gate đều bị lỗi Deadlock (HTTP 400).
-        """
         if time.time() < self.gate_deadlocked_until:
             return False
 
@@ -712,7 +729,6 @@ class PaidZClient:
             if not raw_items:
                 return False
 
-            # Lọc danh sách các nhiệm vụ Gate chưa bị lỗi HTTP 400
             actionable_items = []
             for it in raw_items:
                 if not isinstance(it, bytes):
@@ -723,7 +739,6 @@ class PaidZClient:
                 if cid and cid not in self._skipped_gate_cache:
                     actionable_items.append((cid, title, extract_url_from_proto_fields(tf)))
 
-            # NẾU TOÀN BỘ NHIỆM VỤ TRONG GATE ĐỀU ĐÃ LỖI HTTP 400 -> CHỐNG LẶP VÔ TẬN!
             if not actionable_items:
                 log("GATE_LOCK", "⚠️ Tất cả nhiệm vụ trong Task Gate hiện tại đều đã hết hạn (HTTP 400). Tạm khóa Gate 15 phút để tránh lặp vô tận!", Fore.MAGENTA)
                 self.gate_deadlocked_until = time.time() + 900
@@ -803,8 +818,10 @@ class PaidZClient:
                                     self.balance = new_bal
                                     log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
 
-                            if joined_entity:
+                            if joined_entity and not is_protected_entity(joined_entity):
                                 await asyncio.sleep(4)
+                                await self.tg_leave_target(joined_entity)
+                            elif joined_entity:
                                 await self.tg_leave_target(joined_entity)
         except Exception as e:
             log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
@@ -858,7 +875,6 @@ class PaidZClient:
                 if b'TASK_GATE_REQUIRED' in err_code or b'TASK_GATE' in err_msg:
                     gate_ok = await self.check_and_unlock_task_gate()
                     if not gate_ok:
-                        # Nếu Gate đang bị kẹt lỗi HTTP 400 từ phía Server, cho mạng này nghỉ 15 phút luôn
                         return False, 900
                     return False, 3
 
@@ -936,7 +952,7 @@ async def main_loop():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO PAIDZ ($USDT) - CHẾ ĐỘ TÀNG HÌNH ANTI-DETECTION STEALTH
-  Bản Tối Ưu 100%: Anti-Deadlock Gate + Verified Leave + Auto Stop When Max
+  Bản Tối Ưu 100%: Giữ Kênh @PAIDZ_NEWS + Verified Leave + Auto Stop Max
 =============================================================================
     """ + Style.RESET_ALL)
 
@@ -950,6 +966,9 @@ async def main_loop():
         if not bot.authenticate(init_data):
             log("MAIN", "Đăng nhập thất bại.", Fore.RED)
             return
+
+        # Đảm bảo tài khoản luôn ở trong kênh chính thức @PAIDZ_NEWS ngay khi khởi động
+        await bot.tg_join_target("https://t.me/PAIDZ_NEWS")
 
         await bot.check_and_unlock_task_gate()
         bot.spin_lucky_wheel()
@@ -985,7 +1004,7 @@ async def main_loop():
                     new_init = await bot.fetch_tg_init_data()
                     if new_init:
                         bot.authenticate(new_init)
-                        bot._skipped_gate_cache.clear()  # Làm mới bộ nhớ Gate mỗi 30 phút
+                        bot._skipped_gate_cache.clear()
                         await bot.check_and_unlock_task_gate()
                         last_refresh_time = time.time()
 
