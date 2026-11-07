@@ -1,0 +1,54 @@
+name: Game 2 - Auto HashLane 24/7 (Acc 2 - gaylobucu)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 */6 * * *'
+
+concurrency:
+  group: hashlane-acc2-run
+  cancel-in-progress: true
+
+jobs:
+  run-hashlane-acc2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install telethon requests colorama urllib3
+
+      - name: Chay Auto HashLane 24/7 (Acc 2)
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          GITHUB_REPOSITORY: "auo-ele/paidz"
+          WORKFLOW_FILE: "game2_hashlane_acc2.yml"
+          TELEGRAM_API_ID: "34333329"
+          TELEGRAM_API_HASH: "4f9371f95000578c84dbc670aaf1f819"
+          GH_PAT: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          MAX_RUNTIME_SECONDS: "17500"
+        run: |
+          python auto_hashlane.py --acc 2 --loop 20
+
+      - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Kich hoat ca chay tiep theo cho game2_hashlane_acc2.yml..."
+          sleep 12
+          gh workflow run game2_hashlane_acc2.yml --repo "${{ github.repository }}" || echo "Handover triggered."
