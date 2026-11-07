@@ -24,6 +24,7 @@ import random
 import hashlib
 import asyncio
 import urllib.parse
+import re
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -263,6 +264,8 @@ class PaidZClient:
         self.exhausted_networks = set()
         self._skipped_gate_cache = set()
         self.gate_deadlocked_until = 0
+        self.last_ad_claim_time = 0.0
+        self.global_ad_cooldown_until = 0.0
 
         self.tg_client = TelegramClient(
             StringSession(TELEGRAM_STRING_SESSION),
@@ -871,7 +874,9 @@ class PaidZClient:
                 err_data = decode_proto(r_start.content)
                 err_code = err_data.get(5, b'')
                 err_msg = err_data.get(6, b'')
-                
+                err_code_str = err_code.decode('utf-8', errors='ignore') if isinstance(err_code, bytes) else str(err_code)
+                err_msg_str = err_msg.decode('utf-8', errors='ignore') if isinstance(err_msg, bytes) else str(err_msg)
+
                 if b'TASK_GATE_REQUIRED' in err_code or b'TASK_GATE' in err_msg:
                     gate_ok = await self.check_and_unlock_task_gate()
                     if not gate_ok:
@@ -883,8 +888,23 @@ class PaidZClient:
                     log("MAX_LIMIT", f"🛑 Mạng '{network_name}' đã đạt giới hạn tối đa trong ngày!", Fore.MAGENTA)
                     return False, 0
 
-                log("AD_START_WARN", f"Không thể bắt đầu ca xem ({network_name}): {err_code} - {err_msg}", Fore.YELLOW)
-                return False, 12
+                # Xử lý khi mạng hết quảng cáo khu vực (NO_FILL_COOLDOWN)
+                if 'NO_FILL' in err_code_str or 'No ads available' in err_msg_str:
+                    cd = random.randint(90, 150)
+                    log("NO_FILL", f"⏸️ Mạng '{network_name}' tạm hết quảng cáo vùng. Tạm dừng {cd}s để ưu tiên mạng khác.", Fore.YELLOW)
+                    return False, cd
+
+                # Xử lý nếu bị AD_WATCH_TOO_FAST từ bước start
+                if 'TOO_FAST' in err_code_str or 'Too fast' in err_msg_str or 'wait' in err_msg_str.lower():
+                    m = re.search(r'wait (\d+) more second', err_msg_str, re.IGNORECASE)
+                    wait_sec = (int(m.group(1)) + 1.5) if m else 8.0
+                    log("TOO_FAST", f"⏱️ Máy chủ yêu cầu chờ {wait_sec:.1f}s giữa các lượt QC: {err_msg_str}", Fore.YELLOW)
+                    self.global_ad_cooldown_until = time.time() + wait_sec
+                    await asyncio.sleep(wait_sec)
+                    return False, 5
+
+                log("AD_START_WARN", f"Không thể bắt đầu ca xem ({network_name}): {err_code_str} - {err_msg_str}", Fore.YELLOW)
+                return False, 15
 
             start_fields = decode_proto(r_start.content)
             session_token_raw = start_fields.get(2, b'')
@@ -894,9 +914,16 @@ class PaidZClient:
             if not session_token:
                 return False, 5
 
-            view_seconds = max(min_duration, 4) + round(random.uniform(1.2, 2.2), 2)
+            # Thời lượng xem tự nhiên (8.5 - 11.5s) mô phỏng người dùng thật xem video/interstitial ad
+            view_seconds = max(min_duration, 7) + round(random.uniform(1.8, 3.8), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
             await asyncio.sleep(view_seconds)
+
+            # Đảm bảo khoảng cách giữa 2 lần claim QC cách nhau ít nhất 18.5s theo quy định máy chủ PaidZ
+            elapsed_since_last_claim = time.time() - self.last_ad_claim_time
+            if elapsed_since_last_claim < 18.5:
+                extra_wait = round(18.5 - elapsed_since_last_claim, 1)
+                await asyncio.sleep(extra_wait)
 
             duration_ms = view_seconds * 1000.0
             req_watch = b"".join([
@@ -908,6 +935,7 @@ class PaidZClient:
 
             r_watch = self.http.post(f"{API_BASE}/ads/watch", data=req_watch, headers=self.get_headers(), timeout=12)
             if r_watch.status_code == 200:
+                self.last_ad_claim_time = time.time()
                 w_fields = decode_proto(r_watch.content)
                 reward = float(w_fields.get(2, 0.0))
                 self.balance = float(w_fields.get(3, self.balance + reward))
@@ -920,7 +948,22 @@ class PaidZClient:
                 return True, cd
             else:
                 err = decode_proto(r_watch.content)
-                log("WATCH_ERR", f"Lỗi xác nhận ({network_name}): {err.get(10, b'')} {err.get(11, b'')}", Fore.YELLOW)
+                err_code = err.get(10, b'')
+                err_msg = err.get(11, b'')
+                err_code_str = err_code.decode('utf-8', errors='ignore') if isinstance(err_code, bytes) else str(err_code)
+                err_msg_str = err_msg.decode('utf-8', errors='ignore') if isinstance(err_msg, bytes) else str(err_msg)
+
+                # Bắt lỗi AD_WATCH_TOO_FAST từ server
+                if 'TOO_FAST' in err_code_str or 'Too fast' in err_msg_str or 'wait' in err_msg_str.lower():
+                    m = re.search(r'wait (\d+) more second', err_msg_str, re.IGNORECASE)
+                    wait_sec = (int(m.group(1)) + 1.5) if m else 7.5
+                    log("TOO_FAST", f"⏱️ Máy chủ yêu cầu chờ {wait_sec:.1f}s trước khi claim QC tiếp ({network_name}): {err_msg_str}", Fore.YELLOW)
+                    self.global_ad_cooldown_until = time.time() + wait_sec
+                    await asyncio.sleep(wait_sec)
+                    return False, 5
+                else:
+                    log("WATCH_ERR", f"Lỗi xác nhận ({network_name}): {err_code_str} {err_msg_str}", Fore.YELLOW)
+                    return False, 10
         except Exception as e:
             log("WATCH_EXC", f"Ngoại lệ khi xem ad: {e}", Fore.RED)
         return False, 10
@@ -928,7 +971,7 @@ class PaidZClient:
 
 def trigger_next_shift():
     log("HANDOVER", f"🔄 Chuẩn bị chuyển giao ca làm việc tiếp theo trên {REPO_NAME}...", Fore.CYAN)
-    pat = (os.getenv("GH_PAT") or ("ghp_" + "4uoxqr79k4DnDki4jYmjIORTKybfeX1XnPbn")).strip()
+    pat = os.getenv("GH_PAT", "").strip()
     url = f"https://api.github.com/repos/{REPO_NAME}/actions/workflows/{WORKFLOW_FILE}/dispatches"
     headers = {
         "Authorization": f"Bearer {pat}",
@@ -952,7 +995,7 @@ async def main_loop():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO PAIDZ ($USDT) - CHẾ ĐỘ TÀNG HÌNH ANTI-DETECTION STEALTH
-  Bản Tối Ưu 100%: Giữ Kênh @PAIDZ_NEWS + Verified Leave + Auto Stop Max
+  Tối ưu hóa: Nghỉ siêu tốc 10-20s (Anti-Fatigue) | Giữ Kênh @PAIDZ_NEWS
 =============================================================================
     """ + Style.RESET_ALL)
 
@@ -1014,11 +1057,19 @@ async def main_loop():
                     last_task_check_time = time.time()
 
                 now = time.time()
-                ready_nets = [n for n in networks if now >= network_cooldowns.get(n["name"], 0)]
+
+                # Kiểm tra cooldown toàn cục
+                if now < bot.global_ad_cooldown_until:
+                    sleep_g = bot.global_ad_cooldown_until - now
+                    await asyncio.sleep(sleep_g)
+                    now = time.time()
+
+                ready_nets = [n for n in networks if now >= network_cooldowns.get(n["name"], 0) and n["name"] not in bot.exhausted_networks]
 
                 if not ready_nets:
-                    wait_time = min(network_cooldowns.get(n["name"], now + 5) for n in networks) - now
-                    sleep_t = max(2.0, min(wait_time, 15.0))
+                    valid_cooldowns = [network_cooldowns.get(n["name"], now + 5) for n in networks if n["name"] not in bot.exhausted_networks]
+                    wait_time = (min(valid_cooldowns) - now) if valid_cooldowns else 5.0
+                    sleep_t = max(2.0, min(wait_time, 20.0))
                     await asyncio.sleep(sleep_t)
                     continue
 
@@ -1032,7 +1083,7 @@ async def main_loop():
                     network_cooldowns[net_name] = time.time() + cd
 
                 if net_name in bot.exhausted_networks:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
                     continue
 
                 if success:
@@ -1044,7 +1095,7 @@ async def main_loop():
                     await asyncio.sleep(rest_seconds)
                     ads_session_count = 0
                 else:
-                    gap_sleep = round(random.uniform(5.5, 7.0), 1)
+                    gap_sleep = round(random.uniform(8.0, 11.0), 1)
                     await asyncio.sleep(gap_sleep)
 
             except KeyboardInterrupt:
