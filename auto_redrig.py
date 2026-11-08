@@ -42,6 +42,7 @@ from telethon.tl.functions.messages import RequestWebViewRequest
 
 from human_behavior import (
     get_device_profile,
+    report_device_to_server,
     handle_sleep_schedule_async,
     check_sleep_window,
     SessionBurstManager,
@@ -172,6 +173,13 @@ class RedRigBot:
                     self.power = pw.get("total", 0)
                     self.earn_h = st.get("earn", {}).get("per_hour", "0")
                     log("AUTH", f"✅ Đăng nhập REDRIG! User: @{u.get('username')} | Số dư: {self.balance} TON | Công suất: {self.power}⚡ ({float(self.earn_h):.8f} TON/h)", Fore.GREEN)
+                    if not getattr(self, "_device_reported", False):
+                        ok_fp, fp_res = report_device_to_server(API_BASE, self.init_data, self.acc_id, "Redrig")
+                        if ok_fp:
+                            log("DEVICE_FP", f"✅ [DEVICE-OK] Đã đăng ký thiết bị sạch: {self.device_name} (fp={fp_res})", Fore.GREEN)
+                            self._device_reported = True
+                        else:
+                            log("DEVICE_FP_WARN", f"⚠️ Gửi fp thiết bị: {fp_res}", Fore.YELLOW)
                     return st
             log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}", Fore.YELLOW)
         except Exception as e:

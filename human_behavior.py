@@ -114,6 +114,80 @@ def get_gramstone_fp(acc_id: int):
     raw = f"{p['model']}|{p['screen']}|{p['dpr']}|{p['webgl_renderer']}|acc_{acc_id}"
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
+def get_moonpool_device_payload(acc_id: int, app_name: str = "Eggram"):
+    """
+    Tạo payload đăng ký thiết bị chuẩn /api/device cho Eggram và REDRIG.
+    Khớp 100% thuật toán fp.js của Moonpool Engine (SHA-256 32-char + summary).
+    """
+    p = get_device_profile(acc_id)
+    screen_wh = p["screen"].split("x")[:2]
+    screen_str = f"{screen_wh[0]}x{screen_wh[1]}"
+    
+    summary = {
+        "tg_platform": "android",
+        "tg_version": "11.5.0",
+        "platform": p["platform"],
+        "screen": screen_str,
+        "dpr": float(p["dpr"]),
+        "color_depth": 24,
+        "tz": "Asia/Ho_Chi_Minh",
+        "langs": "vi-VN,vi,en-US,en",
+        "cores": int(p["cores"]),
+        "memory": int(p["ram"]),
+        "touch": 5,
+        "gpu_vendor": p["webgl_vendor"],
+        "gpu_renderer": p["webgl_renderer"]
+    }
+    
+    canvas_sig_raw = f"{app_name}|canvasSig|{p['model']}|{p['webgl_renderer']}|acc_{acc_id}"
+    canvas_hash = hashlib.sha256(canvas_sig_raw.encode("utf-8")).hexdigest()
+    
+    raw_traits = [
+        str(summary["tg_platform"]),
+        str(summary["tg_version"]),
+        str(summary["platform"]),
+        str(summary["screen"]),
+        str(summary["dpr"]),
+        str(summary["color_depth"]),
+        str(summary["tz"]),
+        str(summary["langs"]),
+        str(summary["cores"]),
+        str(summary["memory"]),
+        str(summary["touch"]),
+        str(summary["gpu_vendor"]),
+        str(summary["gpu_renderer"]),
+        canvas_hash
+    ]
+    raw_str = "|".join(raw_traits)
+    fp = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()[:32]
+    
+    return {"fp": fp, "summary": summary}
+
+
+def report_device_to_server(api_base: str, init_data: str, acc_id: int, app_name: str = "Eggram"):
+    """
+    Gửi báo cáo vân tay thiết bị lên /api/device như client web thật (reportDevice trong fp.js)
+    """
+    try:
+        import requests
+        dev = get_device_profile(acc_id)
+        payload = get_moonpool_device_payload(acc_id, app_name)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": dev["ua"],
+            "X-Telegram-Init-Data": init_data,
+            "Origin": api_base,
+            "Referer": f"{api_base}/"
+        }
+        res = requests.post(f"{api_base}/api/device", headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            return True, payload["fp"]
+        return False, f"HTTP {res.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 
 # -------------------------------------------------------------
 # 2. GIỜ NGỦ TỰ NHIÊN (00:30 - 05:15 SÁNG GIỜ VN)

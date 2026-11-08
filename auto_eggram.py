@@ -31,6 +31,7 @@ from telethon.tl.functions.messages import RequestWebViewRequest
 
 from human_behavior import (
     get_device_profile,
+    report_device_to_server,
     handle_sleep_schedule_sync,
     check_sleep_window,
     SessionBurstManager,
@@ -187,6 +188,13 @@ class EggramBot:
                     cfg_nets = state.get("config", {}).get("networks", {})
                     if cfg_nets.get("adsgram", {}).get("block_id"):
                         self.adsgram_block_id = str(cfg_nets["adsgram"]["block_id"])
+                    if not getattr(self, "_device_reported", False):
+                        ok_fp, fp_res = report_device_to_server(API_BASE, self.init_data, self.acc_id, "Eggram")
+                        if ok_fp:
+                            log(f"ACC{self.acc_id}_FP", f"✅ [DEVICE-OK] Đã đăng ký thiết bị sạch: {self.device_name} (fp={fp_res})", Fore.GREEN)
+                            self._device_reported = True
+                        else:
+                            log(f"ACC{self.acc_id}_FP_WARN", f"⚠️ Gửi fp thiết bị: {fp_res}", Fore.YELLOW)
                     return state
             elif r.status_code == 401:
                 log(f"ACC{self.acc_id}_AUTH", "Token hết hạn 401. Đang làm mới...", Fore.YELLOW)
