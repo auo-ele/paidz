@@ -98,6 +98,7 @@ class RedRigBot:
         self.device_name = dev["device_name"]
         self.ua = dev["ua"]
         self.platform = dev["platform"]
+        self.http = requests.Session()
 
     async def fetch_tg_init_data(self):
         log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData REDRIG tươi mới...", Fore.CYAN)
@@ -238,12 +239,59 @@ class RedRigBot:
                 log("CLAIM_ERR", f"Lỗi thu hoạch két sắt: {e}", Fore.RED)
         return state
 
+    def trigger_adsgram_events(self, block_id="58154"):
+        """Gửi Render, Show, Reward tới Adsgram chuẩn định dạng quốc tế (language=en)"""
+        ad_headers = {
+            "User-Agent": self.ua,
+            "Origin": API_BASE,
+            "Referer": f"{API_BASE}/",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "org.telegram.messenger"
+        }
+        adv_params = {
+            "blockId": str(block_id),
+            "tg_id": self.user_id,
+            "tg_platform": "android",
+            "platform": getattr(self, "platform", "Linux aarch64"),
+            "language": "en",
+            "top_domain": "sslip.io",
+            "signature": self.sig,
+            "data_check_string": self.dcs,
+            "sdk_version": "2.2.5"
+        }
+        try:
+            r = self.http.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=12)
+            urls = []
+            if r.status_code == 200:
+                try:
+                    d = r.json()
+                    trackings = d.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
+                    for t in trackings:
+                        v = t.get("value")
+                        if v: urls.append(v)
+                except Exception:
+                    pass
+                if not urls:
+                    urls = re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r.text)
+
+            for u in urls:
+                try: self.http.get(u, headers=ad_headers, timeout=8)
+                except Exception: pass
+
+            log("ADSGRAM", f"Đang xem video Adsgram ({len(urls)} tracking events)...", Fore.YELLOW)
+            time.sleep(8.5)
+            return True
+        except Exception as e:
+            log("ADSGRAM_WARN", f"Lỗi gọi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
+            time.sleep(8.5)
+            return False
+
     def report_step(self, session_id, network, max_tries=18):
         """Báo cáo hoàn thành bước QC chuẩn frontend redrig_app.js"""
         started = time.time()
         for attempt in range(max_tries):
             try:
-                r = requests.post(
+                r = self.http.post(
                     f"{API_BASE}/api/fish/step",
                     headers=self.get_headers(),
                     json={"session_id": session_id, "network": network},
@@ -253,8 +301,11 @@ class RedRigBot:
                 if d.get("ok") and d.get("counted"):
                     return True, d.get("session")
                 code = d.get("code", "")
-                if code in ["out_of_order", "chain_complete", "session_closed", "fish_already_granted"]:
+                if code in ["chain_complete", "session_closed", "fish_already_granted"]:
                     return True, d.get("session")
+                if code == "out_of_order":
+                    log("STEP_WARN", f"[{network}] Server báo out_of_order (bước trước chưa hoàn thành)!", Fore.RED)
+                    return False, None
                 if code == "too_early":
                     retry_ms = d.get("retry_in_ms") or d.get("data", {}).get("retry_in_ms", 1200)
                     wait_s = min(6.0, float(retry_ms) / 1000.0) + 0.35
@@ -295,6 +346,9 @@ class RedRigBot:
         open_ses = state.get("open_session")
         if open_ses and open_ses.get("id"):
             exp = open_ses.get("expires_at", 0)
+            purpose = open_ses.get("purpose", "")
+            if purpose == "rack":
+                return self.boost_rack_unlock_chain(state)
             if exp > srv_time:
                 ses_id = open_ses.get("id")
                 tier = open_ses.get("card_tier", 3)
@@ -304,11 +358,11 @@ class RedRigBot:
                 log("GPU_MOONPOOL", f"Phát hiện ca GPU #{ses_id} (Tier {tier}) đang mở (Đã xong bước {steps_done}/{len(chain)}). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
             else:
                 log("GPU_MOONPOOL", f"Phiên GPU #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
-                try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
                 except Exception: pass
                 time.sleep(2)
 
-        # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack (Hỗ trợ Auto-Fallback chống 429)
+        # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack
         if not ses_id:
             cards = state.get("cards", [])
             candidate_tiers = []
@@ -321,7 +375,6 @@ class RedRigBot:
                 log("GPU_MOONPOOL", "🖥️ Giàn máy đào Rack đã lấp đầy 100% tất cả các khe cắm! Đang vận hành ở công suất tối đa.", Fore.GREEN)
                 return state
 
-            # Thử từng Tier từ cao xuống thấp (Tier 3 -> Tier 2 -> Tier 1)
             started_session = False
             for t, c_info in candidate_tiers:
                 tier = t
@@ -336,7 +389,7 @@ class RedRigBot:
                 r_start = None
                 for _stry in range(3):
                     try:
-                        r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
+                        r_start = self.http.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
                         if r_start.status_code == 429:
                             log("GPU_COOLDOWN", f"⚠️ Tier {tier} bị 429 rate limit. Chờ 5s thử lại...", Fore.YELLOW)
                             time.sleep(5.0)
@@ -366,13 +419,11 @@ class RedRigBot:
                     log("GPU_WARN", f"Chưa thể bắt đầu ca mới Tier {tier} (HTTP {r_start.status_code})", Fore.YELLOW)
 
             if not started_session:
-                # Nếu toàn bộ các Tier GPU đều bị 429 hoặc đang hồi chiêu
                 ru = state.get("rack_unlock", {})
-                if ru.get("can_new"):
-                    log("GPU_FALLBACK", "🔄 Toàn bộ Card GPU đang giới hạn/hồi chiêu. Tự động chuyển sang cày Mở khóa Rack mới...", Fore.MAGENTA)
+                if ru.get("expired_idx") is not None or ru.get("can_new"):
+                    log("GPU_FALLBACK", "🔄 Toàn bộ Card GPU đang giới hạn/hồi chiêu. Tự động chuyển sang cày Mở/Khôi phục Rack...", Fore.MAGENTA)
                     return self.boost_rack_unlock_chain(state)
                 
-                # Tính toán thời gian hồi chiêu ngắn nhất
                 min_cd = min([c.get("cooldown_left_sec", 60) for _, c in candidate_tiers if c.get("cooldown_left_sec", 0) > 0] or [60])
                 wait_sec = max(30, min_cd)
                 log("GPU_COOLDOWN", f"⏳ Toàn bộ Card GPU đang hồi chiêu. Tự động chờ {wait_sec}s...", Fore.YELLOW)
@@ -380,73 +431,20 @@ class RedRigBot:
                 return state
 
         try:
-            # --- BƯỚC 1: ADSGRAM (nếu có trong chuỗi) ---
+            # Step 1: Adsgram
             if "adsgram" in chain and start_step <= 1:
                 log("STEP1_ADSGRAM", f"Bước 1/{len(chain)}: Đang tải quảng cáo Adsgram (Block {block_id})...", Fore.YELLOW)
-                ad_headers = {
-                    "User-Agent": self.ua,
-                    "Origin": API_BASE,
-                    "Referer": f"{API_BASE}/",
-                    "Accept": "application/json",
-                    "X-Requested-With": "org.telegram.messenger"
-                }
-                adv_params = {
-                    "blockId": block_id,
-                    "tg_id": self.user_id,
-                    "tg_platform": "android",
-                    "platform": "Linux aarch64",
-                    "language": "vi",
-                    "top_domain": "sslip.io",
-                    "signature": self.sig,
-                    "data_check_string": self.dcs,
-                    "sdk_version": "2.2.5"
-                }
-                try:
-                    r_adv = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=12)
-                    render_url, show_url, reward_url = None, None, None
-                    if r_adv.status_code == 200:
-                        try:
-                            d_adv = r_adv.json()
-                            trackings = d_adv.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
-                            for t in trackings:
-                                tn = t.get("name")
-                                tv = t.get("value")
-                                if tn == "render": render_url = tv
-                                elif tn == "show": show_url = tv
-                                elif tn == "reward": reward_url = tv
-                        except Exception: pass
-                        if not render_url or not reward_url:
-                            for u in re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r_adv.text):
-                                if "Render" in u or "trackingtypeid=1" in u:
-                                    render_url = u
-                                elif "Show" in u or "trackingtypeid=0" in u or "trackingtypeid=2" in u:
-                                    show_url = u
-                                elif "Reward" in u or "trackingtypeid=14" in u:
-                                    reward_url = u
-                    if render_url:
-                        try: requests.get(render_url, headers=ad_headers, timeout=8)
-                        except Exception: pass
-                    if show_url:
-                        try: requests.get(show_url, headers=ad_headers, timeout=8)
-                        except Exception: pass
-                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(8.5)
-                    if reward_url:
-                        try: requests.get(reward_url, headers=ad_headers, timeout=10)
-                        except Exception: pass
-                    time.sleep(3.5)
-                except Exception as e_adv:
-                    log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(8.5)
+                self.trigger_adsgram_events(block_id)
                 counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=18)
                 if counted_s1:
                     log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
                 else:
                     log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Kết thúc phiên an toàn tránh kẹt...", Fore.YELLOW)
-                    try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
                     except Exception: pass
                     return state
 
+            # Step 2: Gigapub
             if "gigapub" in chain and start_step <= 2:
                 step_idx = chain.index("gigapub") + 1
                 log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (8.5s)...", Fore.YELLOW)
@@ -455,9 +453,12 @@ class RedRigBot:
                 if counted_s2:
                     log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
                 else:
-                    log("STEP2_WARN", "Chưa xác nhận được Bước Gigapub.", Fore.YELLOW)
+                    log("STEP2_WARN", "Chưa xác nhận được Bước Gigapub. Kết thúc phiên...", Fore.YELLOW)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
+                    return state
 
-            # --- BƯỚC 3: MONETAG (nếu có trong chuỗi) ---
+            # Step 3: Monetag
             if "monetag" in chain and start_step <= 3:
                 step_idx = chain.index("monetag") + 1
                 log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (8.5s)...", Fore.YELLOW)
@@ -466,10 +467,13 @@ class RedRigBot:
                 if counted_s3:
                     log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
                 else:
-                    log("STEP3_WARN", "Chưa xác nhận được Bước Monetag.", Fore.YELLOW)
+                    log("STEP3_WARN", "Chưa xác nhận được Bước Monetag. Kết thúc phiên...", Fore.YELLOW)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
+                    return state
 
-            # --- KẾT THÚC VÀ NHẬN CARD GPU VÀO RACK ---
-            r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
+            # Finish
+            r_fin = self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
             if r_fin.get("ok"):
                 f = r_fin.get("fish", {})
                 nst = r_fin.get("state", {})
@@ -481,7 +485,7 @@ class RedRigBot:
                 log("GPU_WARN", f"Kết thúc chuỗi: {r_fin.get('close_reason', 'done')}", Fore.YELLOW)
         except Exception as e:
             log("GPU_ERR", f"Lỗi trong chuỗi QC Moonpool: {e}", Fore.RED)
-            try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+            try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
             except Exception: pass
         return state
 
@@ -502,7 +506,7 @@ class RedRigBot:
             return
 
         try:
-            r = requests.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=10).json()
+            r = self.http.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=10).json()
             if r.get("ok"):
                 rew = r.get("reward", {})
                 log("STREAK", f"🎉 ĐÃ NHẬN DAILY STREAK NGÀY {day}: +{rew.get('ton')} TON, +{rew.get('power')}⚡ Power!", Fore.GREEN)
@@ -522,7 +526,7 @@ class RedRigBot:
             log("RACK", f"🖥️ Rack #{idx}: {'Đang hoạt động' if active else 'Chưa kích hoạt'} | Cắm {cards} Card GPU | Trống {free} chỗ", Fore.CYAN)
 
     def boost_rack_unlock_chain(self, state):
-        """Xem chuỗi 3 QC để mở khóa thêm Rack máy đào mới (Chuẩn chống 429 & Resume Open Session)"""
+        """Xem chuỗi 3 QC để mở khóa thêm Rack máy đào mới hoặc tái kích hoạt Rack hết hạn"""
         cfg = state.get("config", {})
         block_id = cfg.get("networks", {}).get("adsgram", {}).get("block_id") or "58154"
         ru = state.get("rack_unlock", {})
@@ -535,9 +539,8 @@ class RedRigBot:
         if ready_at and ready_at > srv_time:
             cd_left = int((ready_at - srv_time) / 1000)
             if cd_left > 0:
-                log("RACK_COOLDOWN", f"⏳ Ca mở khóa Rack đang trong thời gian hồi chiêu (còn {cd_left}s). Đang tự động chờ...", Fore.YELLOW)
-                time.sleep(min(cd_left + 2, 65))
-                return state
+                log("RACK_COOLDOWN", f"⏳ Ca mở khóa Rack đang trong thời gian hồi chiêu (còn {cd_left}s). Thử cày GPU...", Fore.YELLOW)
+                return self.boost_moonpool_gpu_chain(state)
 
         ses_id = None
         chain = ["adsgram", "gigapub", "monetag"]
@@ -556,16 +559,15 @@ class RedRigBot:
                 log("RACK_UNLOCK", f"Phát hiện ca mở Rack #{ses_id} đang mở (Đã xong {steps_done}/{len(chain)} bước). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
             elif exp <= srv_time:
                 log("RACK_UNLOCK", f"Phiên cũ #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
-                try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
                 except Exception: pass
                 time.sleep(2)
 
         # 3. Khởi tạo phiên Unlock Rack nếu chưa có session
         if not ses_id:
-            log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
-            target_rack = ru.get("expired_idx") if ru.get("expired_idx") is not None else "new"
+            target_rack = ru.get("expired_idx") if ru.get("expired_idx") is not None else (ru.get("target") or "new")
             log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa/tái kích hoạt Rack #{target_rack} (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
-            r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": target_rack}, timeout=10)
+            r_start = self.http.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": target_rack}, timeout=10)
             if r_start.status_code == 200:
                 d = r_start.json()
                 if d.get("ok"):
@@ -585,83 +587,59 @@ class RedRigBot:
             # Step 1: Adsgram
             if "adsgram" in chain and start_step <= 1:
                 log("STEP1_ADSGRAM", f"Bước 1/3: Xem QC Adsgram (Block {block_id})...", Fore.YELLOW)
-                ad_headers = {
-                    "User-Agent": self.ua, "Origin": API_BASE, "Referer": f"{API_BASE}/",
-                    "Accept": "application/json", "X-Requested-With": "org.telegram.messenger"
-                }
-                adv_params = {
-                    "blockId": block_id, "tg_id": self.user_id, "tg_platform": "android",
-                    "platform": "Linux aarch64", "language": "vi", "top_domain": "sslip.io",
-                    "signature": self.sig, "data_check_string": self.dcs, "sdk_version": "2.2.5"
-                }
-                try:
-                    r_adv = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=12)
-                    render_url, show_url, reward_url = None, None, None
-                    if r_adv.status_code == 200:
-                        try:
-                            d_adv = r_adv.json()
-                            trackings = d_adv.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
-                            for t in trackings:
-                                tn = t.get("name")
-                                tv = t.get("value")
-                                if tn == "render": render_url = tv
-                                elif tn == "show": show_url = tv
-                                elif tn == "reward": reward_url = tv
-                        except Exception: pass
-                        if not render_url or not reward_url:
-                            for u in re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r_adv.text):
-                                if "Render" in u or "trackingtypeid=1" in u:
-                                    render_url = u
-                                elif "Show" in u or "trackingtypeid=0" in u or "trackingtypeid=2" in u:
-                                    show_url = u
-                                elif "Reward" in u or "trackingtypeid=14" in u:
-                                    reward_url = u
-                    if render_url:
-                        try: requests.get(render_url, headers=ad_headers, timeout=8)
-                        except Exception: pass
-                    if show_url:
-                        try: requests.get(show_url, headers=ad_headers, timeout=8)
-                        except Exception: pass
-                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(8.5)
-                    if reward_url:
-                        try: requests.get(reward_url, headers=ad_headers, timeout=10)
-                        except Exception: pass
-                    time.sleep(3.5)
-                except Exception as e_adv:
-                    log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(8.5)
+                self.trigger_adsgram_events(block_id)
                 c1, _ = self.report_step(ses_id, "adsgram", max_tries=18)
                 if c1:
                     log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram thành công!", Fore.GREEN)
+                else:
+                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Kết thúc phiên...", Fore.YELLOW)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
+                    return state
+
+            # Step 2: Gigapub
             if "gigapub" in chain and start_step <= 2:
                 log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (8.5s)...", Fore.YELLOW)
                 time.sleep(8.5)
                 c2, _ = self.report_step(ses_id, "gigapub", max_tries=18)
                 if c2:
                     log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
+                else:
+                    log("STEP2_WARN", "Chưa xác nhận được Bước 2 Gigapub. Kết thúc phiên...", Fore.YELLOW)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
+                    return state
+
+            # Step 3: Monetag
             if "monetag" in chain and start_step <= 3:
                 log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (8.5s)...", Fore.YELLOW)
                 time.sleep(8.5)
                 c3, _ = self.report_step(ses_id, "monetag", max_tries=18)
                 if c3:
                     log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)
+                else:
+                    log("STEP3_WARN", "Chưa xác nhận được Bước 3 Monetag. Kết thúc phiên...", Fore.YELLOW)
+                    try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
+                    return state
+
             # Finish
-            r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
+            r_fin = self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
             if r_fin.get("ok"):
                 nst = r_fin.get("state", {})
                 nru = nst.get("rack_unlock", {})
                 rk = r_fin.get("rack", {})
                 applied = rk.get("applied")
                 if applied:
-                    log("RACK_SUCCESS", f"🎉🎉🎉 CHÚC MỪNG! ĐÃ MỞ KHÓA THÀNH CÔNG RACK #{applied.get('idx', 2)}!", Fore.GREEN)
+                    tot_pw = nst.get("power", {}).get("total", self.power)
+                    log("RACK_SUCCESS", f"🎉🎉🎉 CHÚC MỪNG! ĐÃ MỞ KHÓA/TÁI KÍCH HOẠT THÀNH CÔNG RACK #{applied.get('idx', 2)}! Công suất khôi phục: {tot_pw}⚡", Fore.GREEN)
                 else:
                     new_done = nru.get("ads_done", done + 3)
                     log("RACK_SUCCESS", f"🎉 HOÀN THÀNH CHUỖI MỞ RACK! Tiến độ mới: {new_done}/{needed} ads", Fore.GREEN)
                 return nst
         except Exception as e:
             log("RACK_ERR", f"Lỗi trong chuỗi mở rack: {e}", Fore.RED)
-            try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+            try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
             except Exception: pass
         return state
 
@@ -673,13 +651,19 @@ class RedRigBot:
         # 1. Thu hoạch két sắt TON
         state = self.check_and_claim_vault(state)
         
-        # 2. Cày Card GPU theo chuẩn Native Moonpool (Tự động chọn Tier phù hợp với Rack)
-        state = self.boost_moonpool_gpu_chain(state)
+        # 2. Ưu tiên mở khóa / tái kích hoạt Rack hết hạn để khôi phục công suất
+        ru = state.get("rack_unlock", {})
+        if ru.get("expired_idx") is not None or (ru.get("ads_done", 0) > 0 and not ru.get("full")):
+            log("CYCLE", f"⚡ Ưu tiên mở khóa/tái kích hoạt Rack (Tiến độ: {ru.get('ads_done', 0)}/{ru.get('ads_needed', 9)} ads)...", Fore.CYAN)
+            state = self.boost_rack_unlock_chain(state)
+        else:
+            # 3. Cày Card GPU theo chuẩn Native Moonpool (Tự động chọn Tier phù hợp với Rack)
+            state = self.boost_moonpool_gpu_chain(state)
         
-        # 3. Kiểm tra & Nhận Daily Streak
+        # 4. Kiểm tra & Nhận Daily Streak
         self.check_and_claim_streak(state)
 
-        # 4. Kiểm tra & duy trì Rack
+        # 5. Kiểm tra & duy trì Rack
         self.manage_racks(state)
 
 
@@ -771,8 +755,8 @@ async def run_loop_247(bot_instance, interval_mins=0):
         can_new_rack = ru.get("can_new", False)
 
         ad_cycle += 1
-        if has_expired_rack:
-            log("CONTINUOUS", f"⚡ [CA #{ad_cycle}] Phát hiện Rack #{expired_rack or 2} hết hạn (mất công suất GPU)! Ưu tiên cày mở lại Rack...", Fore.MAGENTA)
+        if has_expired_rack or (ru.get("ads_done", 0) > 0 and not ru.get("full")):
+            log("CONTINUOUS", f"⚡ [CA #{ad_cycle}] Ưu tiên cày mở/khôi phục Rack #{expired_rack or 2} (Tiến độ: {ru.get('ads_done', 0)}/{ru.get('ads_needed', 9)} ads)...", Fore.MAGENTA)
             state = bot_instance.boost_rack_unlock_chain(state)
         elif has_fit:
             log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Cày Card GPU (+12⚡)...", Fore.CYAN)
