@@ -10,7 +10,7 @@ human_behavior.py - Module Giả Lập Hành Vi Con Người & Chống Ban 100%
 
 2. PHIÊN CHƠI NGẪU NHIÊN (Session Burst & Natural Breaks):
    - Phiên chơi hoạt động kéo dài 20 - 30 phút.
-   - Sau mỗi phiên chơi, đóng app và nghỉ ngơi tự nhiên 45 - 75 phút.
+   - Sau mỗi phiên chơi, đóng app và nghỉ ngơi tự nhiên 5 - 8 phút.
    - Tạo biểu đồ hoạt động (activity curve) hoàn toàn giống người thật.
 
 3. VÂN TAY THIẾT BỊ ĐỘC LẬP (Device Fingerprint Isolation):
@@ -190,9 +190,9 @@ class SessionBurstManager:
     """
     Quản lý phiên chơi ngẫu nhiên:
     - Phiên hoạt động: 20 - 30 phút.
-    - Nghỉ giải lao tự nhiên: 45 - 75 phút.
+    - Nghỉ giải lao tự nhiên: 5 - 8 phút.
     """
-    def __init__(self, burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75):
+    def __init__(self, burst_min_mins=20, burst_max_mins=30, break_min_mins=5, break_max_mins=8):
         self.burst_min = burst_min_mins * 60
         self.burst_max = burst_max_mins * 60
         self.break_min = break_min_mins * 60

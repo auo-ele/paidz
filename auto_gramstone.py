@@ -8,7 +8,7 @@
   
   TÍNH NĂNG CHỐNG BAN & CHỐNG CỜ AUTOCLICKER 100%:
     1. GIỜ NGỦ TỰ NHIÊN: Tự động nghỉ ngơi hoàn toàn 00:30 - 05:15 sáng (Giờ VN).
-    2. PHIÊN CHƠI NGẪU NHIÊN: Hoạt động 20-30 phút, nghỉ giải lao 45-75 phút như người thật.
+    2. PHIÊN CHƠI NGẪU NHIÊN: Hoạt động 20-30 phút, nghỉ giải lao 5-8 phút như người thật.
     3. BIOMETRIC TAP SIMULATION: Micro-tap 6-10 lượt, Gaussian Jitter 1.8s-3.8s,
        tọa độ ngón tay elip, micro-pauses chống cờ "auto clicker" vĩnh viễn.
     4. VÂN TAY PHẦN CỨNG RIÊNG BIỆT: Galaxy S24 Ultra, Xiaomi 13 Pro, Pixel 8 Pro.
@@ -460,10 +460,10 @@ async def run_loop_247(bot_instance, interval_mins=0):
     last_vault_check = 0
     last_tap_check = 0
     
-    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 45-75p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
+    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 5-8p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
     
     # Khởi tạo Quản lý Phiên chơi ngẫu nhiên (Session Burst)
-    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75)
+    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=5, break_max_mins=8)
     
     while True:
         # 1. KIỂM TRA GIỜ NGỦ TỰ NHIÊN (00:30 - 05:15 VN)
@@ -556,7 +556,7 @@ async def main():
     print(Fore.CYAN + f"""
 =============================================================================
   BOT AUTO GRAMSTONE ($GRAM / $TON) 24/7 - HUMAN BEHAVIOR ANTI-BAN 100%
-  Acc: {args.acc} ({bot.device_name}) | Giờ ngủ VN 00:30-05:15 | Phiên 20-30p + Nghỉ 45-75p
+  Acc: {args.acc} ({bot.device_name}) | Giờ ngủ VN 00:30-05:15 | Phiên 20-30p + Nghỉ 5-8p
 =============================================================================
     """ + Style.RESET_ALL)
     

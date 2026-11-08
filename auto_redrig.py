@@ -702,8 +702,8 @@ async def run_loop_247(bot_instance, interval_mins=0):
     last_vault_check = 0
     ad_cycle = 0
     
-    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 45-75p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
-    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75)
+    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 5-8p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
+    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=5, break_max_mins=8)
     
     while True:
         # 1. Kiểm tra Giờ ngủ tự nhiên (00:30 - 05:15 VN)
