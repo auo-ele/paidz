@@ -1,15 +1,14 @@
 """
-Tool Auto Cày Eggram 24/7 Cho 3 Tài Khoản (Full Adsgram / Gigapub / Monetag & Handover Chaining)
+Tool Auto Cày Eggram 24/7 Cho 3 Tài Khoản (Phiên bản Tối ưu Siêu Tốc 5.2s + Pipelining Cooldown)
 Bot Telegram: @eggramearnbot
 Backend: https://eggram.209-38-193-227.sslip.io
 
-Tính năng:
-- Tự động nhận Webview tgWebAppData và refresh định kỳ.
-- Tự động thu hoạch Giỏ Trứng (/api/claim) định kỳ mỗi 3-5 phút.
-- Tự động Ấp Trứng Vàng Tier 3 (/api/fish/start -> Adsgram -> Gigapub -> Monetag -> /api/fish/finish).
-- Tích hợp chuẩn Adsgram Event Tracking (Signature, DCS, Render, Show, Reward) bảo đảm không lỗi ad_unverified.
-- Tự động điểm danh hàng ngày (Daily Streak).
-- Tự động Handover Chaining trên GitHub Actions chạy liên tục 24/7 không gián đoạn.
+Tối ưu hóa:
+- Tốc độ xem QC rút gọn 5.2s/bước (Server quy định ad_min_step_sec: 5).
+- Tự động bắt đúng thời gian cooldown_left_sec + 0.5s để vào ca mới tức thì.
+- Pipelining: Tận dụng thời gian cooldown để gom giỏ trứng (/api/claim) và điểm danh.
+- Full Signature & Data Check String cho Adsgram verification.
+- Handover Chaining 24/7 trên GitHub Actions.
 """
 
 import os
@@ -19,7 +18,6 @@ import json
 import re
 import base64
 import argparse
-import random
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 
@@ -84,6 +82,7 @@ class EggramBot:
         self.dcs = ""
         self.last_init_time = 0
         self.adsgram_block_id = "58569"
+        self.http = requests.Session()
         
         # User agent Android chuẩn
         self.ua = (
@@ -174,12 +173,11 @@ class EggramBot:
         """Gọi /api/auth để lấy full state game"""
         self.ensure_auth()
         try:
-            r = requests.post(f"{API_BASE}/api/auth", headers=self.get_headers(), json={}, timeout=15)
+            r = self.http.post(f"{API_BASE}/api/auth", headers=self.get_headers(), json={}, timeout=15)
             if r.status_code == 200:
                 data = r.json()
                 if data.get("ok"):
                     state = data.get("state", {})
-                    # Cập nhật block_id nếu server trả về
                     cfg_nets = state.get("config", {}).get("networks", {})
                     if cfg_nets.get("adsgram", {}).get("block_id"):
                         self.adsgram_block_id = str(cfg_nets["adsgram"]["block_id"])
@@ -205,18 +203,16 @@ class EggramBot:
         pending = float(vault.get("pending", 0))
 
         if claimable and pending > 0:
-            log(f"ACC{self.acc_id}_BASKET", f"🧺 Giỏ trứng đang có {pending:.6f} GRAM. Đang thu hoạch...", Fore.CYAN)
+            log(f"ACC{self.acc_id}_BASKET", f"🧺 Giỏ trứng đang có {pending:.6f} GRAM. Đang gom...", Fore.CYAN)
             try:
-                r = requests.post(f"{API_BASE}/api/claim", headers=self.get_headers(), json={}, timeout=15)
+                r = self.http.post(f"{API_BASE}/api/claim", headers=self.get_headers(), json={}, timeout=15)
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("ok"):
                         amt = float(data.get("amount", 0))
                         new_bal = float(data.get("state", {}).get("balance", 0))
-                        log(f"ACC{self.acc_id}_CLAIMED", f"✓ Đã gom thành công +{amt:.6f} GRAM vào ví! (Số dư: {new_bal:.6f} GRAM)", Fore.GREEN)
+                        log(f"ACC{self.acc_id}_CLAIMED", f"✓ Đã gom +{amt:.6f} GRAM! (Ví: {new_bal:.6f} GRAM)", Fore.GREEN)
                         return True
-                    else:
-                        log(f"ACC{self.acc_id}_BASKET", f"Chưa thể gom trứng: {data.get('code')}", Fore.LIGHTBLACK_EX)
             except Exception as e:
                 log(f"ACC{self.acc_id}_CLAIM_ERR", f"Lỗi gom trứng: {e}", Fore.RED)
         return False
@@ -233,9 +229,8 @@ class EggramBot:
             tid = t.get("id")
             status = t.get("status")
             if tid == "streak" and status == "claimable":
-                log(f"ACC{self.acc_id}_TASK", "⭐ Điểm danh Daily Streak đang sẵn sàng nhận thưởng!", Fore.YELLOW)
                 try:
-                    r = requests.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=15)
+                    r = self.http.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=15)
                     if r.status_code == 200 and r.json().get("ok"):
                         log(f"ACC{self.acc_id}_STREAK", "✓ Đã nhận thưởng Daily Streak thành công!", Fore.GREEN)
                 except Exception as e:
@@ -243,12 +238,12 @@ class EggramBot:
 
             elif tid in ("channel", "group") and status == "available":
                 try:
-                    requests.post(f"{API_BASE}/api/tasks/{tid}/check", headers=self.get_headers(), json={}, timeout=15)
+                    self.http.post(f"{API_BASE}/api/tasks/{tid}/check", headers=self.get_headers(), json={}, timeout=10)
                 except:
                     pass
 
     def trigger_adsgram_events(self):
-        """Gửi đầy đủ Render, Show, Reward tới Adsgram server"""
+        """Gửi Render, Show, Reward tới Adsgram với tốc độ tối ưu 5.2s"""
         ad_headers = {
             'User-Agent': self.ua,
             'Origin': API_BASE,
@@ -268,11 +263,11 @@ class EggramBot:
             'sdk_version': '2.2.5'
         }
         try:
-            r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=20)
+            r_adv = self.http.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=20)
             if r_adv.status_code == 200:
                 render_u, show_u, reward_u = None, None, None
                 
-                # Cách 1: Parse trực tiếp từ banner trackings
+                # Cách 1: Parse từ banner trackings
                 try:
                     d_json = r_adv.json()
                     banners = d_json.get('banners', [])
@@ -295,32 +290,32 @@ class EggramBot:
                         elif 'type=Reward' in u or 'trackingtypeid=14' in u or 'trackingtypeid=3' in u: reward_u = u
 
                 if render_u:
-                    try: requests.get(render_u, headers=ad_headers, timeout=10)
+                    try: self.http.get(render_u, headers=ad_headers, timeout=10)
                     except: pass
                 if show_u:
-                    try: requests.get(show_u, headers=ad_headers, timeout=10)
+                    try: self.http.get(show_u, headers=ad_headers, timeout=10)
                     except: pass
                 
-                # Chờ thời lượng xem QC tối thiểu
-                time.sleep(8.5)
+                # TỐI ƯU SIÊU TỐC: Đợi đúng 5.2s (đủ chuẩn ad_min_step_sec: 5)
+                time.sleep(5.2)
 
                 if reward_u:
-                    try: requests.get(reward_u, headers=ad_headers, timeout=10)
+                    try: self.http.get(reward_u, headers=ad_headers, timeout=10)
                     except: pass
-                    # Chờ server callback Adsgram đồng bộ tới máy chủ Eggram
-                    time.sleep(2.5)
+                    time.sleep(1.8)
 
                 log(f"ACC{self.acc_id}_ADSGRAM", f"✓ Đã gửi hoàn tất xác thực Adsgram (Block {self.adsgram_block_id})", Fore.GREEN)
                 return True
         except Exception as e:
             log(f"ACC{self.acc_id}_ADSGRAM_WARN", f"Lỗi Adsgram connection: {e}", Fore.LIGHTBLACK_EX)
+            time.sleep(5.2)
         return False
 
     def report_step(self, session_id, network, max_tries=16):
-        """Báo cáo hoàn thành bước QC với cơ chế backoff thông minh"""
+        """Báo cáo hoàn thành bước QC với auto-retry mili-giây chuẩn xác"""
         for t in range(1, max_tries + 1):
             try:
-                r = requests.post(
+                r = self.http.post(
                     f"{API_BASE}/api/fish/step",
                     headers=self.get_headers(),
                     json={"session_id": session_id, "network": network},
@@ -331,41 +326,38 @@ class EggramBot:
                     if d.get("counted"):
                         return True, d.get("session")
                 elif r.status_code == 429:
-                    log(f"ACC{self.acc_id}_429", "Bị giới hạn tốc độ (HTTP 429). Nghỉ 40s hồi phục...", Fore.YELLOW)
-                    time.sleep(40)
+                    log(f"ACC{self.acc_id}_429", "Bị rate limit 429. Nghỉ 35s...", Fore.YELLOW)
+                    time.sleep(35)
                     continue
                 elif r.status_code == 409:
-                    # ad_unverified hoặc too_early
                     d = r.json() if r.text.startswith('{') else {}
                     code = d.get("code")
                     if code in ("chain_complete", "out_of_order"):
                         return True, d.get("session")
                     elif code == "too_early":
-                        time.sleep(2.0)
+                        ms = int(d.get("retry_in_ms", 1200))
+                        time.sleep(max(0.5, (ms / 1000.0) + 0.15))
                         continue
                     elif code == "ad_unverified":
-                        # Chờ Adsgram server callback
-                        time.sleep(2.5)
+                        time.sleep(1.8)
                         continue
-            except Exception as e:
-                time.sleep(2.0)
-            time.sleep(2.0)
+            except Exception:
+                time.sleep(1.5)
+            time.sleep(1.5)
         return False, None
 
     def hatch_egg_chain(self):
-        """Quy trình Ấp Trứng Vàng Tier 3 (+12 ⚡/h trong 24h)"""
+        """Quy trình Ấp Trứng Vàng Tier 3 Tối ưu Siêu Tốc (+12 ⚡/h trong 24h)"""
         state = self.auth_state()
         if not state:
-            return False, 30
+            return False, 15
 
-        # Kiểm tra giới hạn ngày
         daily = state.get("daily", {})
         daily_left = daily.get("left", 80)
         if daily_left <= 0:
             log(f"ACC{self.acc_id}_DAILY_CAP", "Đã đạt giới hạn ấp gà hôm nay (80/80 con). Nghỉ ngơi...", Fore.YELLOW)
             return False, 300
 
-        # Kiểm tra phiên đang mở dở dang
         open_ses = state.get("open_session")
         ses_id = None
         chain = ["adsgram", "gigapub", "monetag"]
@@ -380,20 +372,24 @@ class EggramBot:
                 start_step = open_ses.get("steps_done", 0)
                 log(f"ACC{self.acc_id}_HATCH", f"Phát hiện ca ấp trứng #{ses_id} đang mở (Bước {start_step}/{len(chain)}). Tiếp tục...", Fore.CYAN)
 
-        # Nếu không có session mở, kiểm tra cooldown
+        # Nếu chưa có session, kiểm tra chính xác thời gian cooldown
         if not ses_id:
             cards = state.get("cards", [])
             card_tier3 = next((c for c in cards if c.get("tier") == 3), None)
             if card_tier3:
                 cd_left = card_tier3.get("cooldown_left_sec", 0)
                 if cd_left > 0:
-                    log(f"ACC{self.acc_id}_COOLDOWN", f"⏳ Trứng đang làm mát ({cd_left}s). Chờ lượt kế...", Fore.LIGHTBLACK_EX)
-                    return False, min(cd_left + 1, 60)
+                    log(f"ACC{self.acc_id}_COOLDOWN", f"⏳ Trứng đang hồi chiêu ({cd_left}s). Tranh thủ gom giỏ & nhiệm vụ...", Fore.LIGHTBLACK_EX)
+                    # PIPELINING: Tận dụng thời gian cooldown làm các tác vụ phụ
+                    self.claim_basket(state)
+                    self.check_tasks(state)
+                    # Nghỉ CHÍNH XÁC đúng thời gian cooldown còn lại + 0.5s để vào ca mới tức thì
+                    return False, max(1.0, cd_left + 0.5)
 
             # Bắt đầu ca ấp mới
             log(f"ACC{self.acc_id}_START", "🥚 Bắt đầu mở phiên Ấp Trứng Vàng Tier 3 (+12 ⚡/h)...", Fore.CYAN)
             try:
-                r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": 3}, timeout=15)
+                r_start = self.http.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": 3}, timeout=15)
                 if r_start.status_code == 200:
                     d_start = r_start.json()
                     if d_start.get("ok"):
@@ -401,59 +397,63 @@ class EggramBot:
                         ses_id = ses.get("id")
                         chain = ses.get("chain", chain)
                         start_step = ses.get("steps_done", 0)
-                        log(f"ACC{self.acc_id}_SESSION", f"Phiên #{ses_id} đã kích hoạt! Chuỗi {len(chain)} bước: {chain}", Fore.GREEN)
+                        log(f"ACC{self.acc_id}_SESSION", f"Phiên #{ses_id} kích hoạt! Chuỗi {len(chain)} bước: {chain}", Fore.GREEN)
                     else:
-                        log(f"ACC{self.acc_id}_START_FAIL", f"Không thể bắt đầu: {d_start.get('code')}", Fore.YELLOW)
-                        return False, 30
+                        code = d_start.get('code')
+                        retry_in = d_start.get('retry_in_sec', 15)
+                        log(f"ACC{self.acc_id}_START_FAIL", f"Thông báo: {code} (Chờ {retry_in}s)", Fore.YELLOW)
+                        return False, retry_in
                 else:
-                    return False, 30
+                    return False, 15
             except Exception as e:
                 log(f"ACC{self.acc_id}_START_ERR", f"Lỗi khởi động ca ấp: {e}", Fore.RED)
-                return False, 30
+                return False, 15
 
-        # Thực hiện từng bước QC trong chuỗi
+        # Thực hiện từng bước QC với độ trễ 5.2s siêu tốc
         total = len(chain)
         for idx in range(start_step, total):
             net = chain[idx]
             step_num = idx + 1
-            log(f"ACC{self.acc_id}_STEP", f"Bước {step_num}/{total}: Đang xem quảng cáo {net.upper()}...", Fore.YELLOW)
+            log(f"ACC{self.acc_id}_STEP", f"Bước {step_num}/{total}: Xem QC {net.upper()} (Tối ưu 5.2s)...", Fore.YELLOW)
 
             if net == "adsgram":
                 self.trigger_adsgram_events()
             elif net == "gigapub":
-                time.sleep(8.5)
+                time.sleep(5.2)
             elif net == "monetag":
-                time.sleep(8.5)
+                time.sleep(5.2)
 
             counted, updated_ses = self.report_step(ses_id, net, max_tries=16)
             if counted:
-                log(f"ACC{self.acc_id}_STEP_OK", f"✓ Bước {step_num}/{total} ({net}) hoàn thành thành công!", Fore.GREEN)
+                log(f"ACC{self.acc_id}_STEP_OK", f"✓ Bước {step_num}/{total} ({net}) hoàn tất!", Fore.GREEN)
             else:
                 log(f"ACC{self.acc_id}_STEP_FAIL", f"Chưa xác nhận được bước {step_num} ({net}). Sẽ thử lại vòng sau.", Fore.YELLOW)
-                return False, 10
+                return False, 5
 
-        # Hoàn thành ấp trứng
-        log(f"ACC{self.acc_id}_FINISH", f"🐣 Đang hoàn tất ấp trứng cho phiên #{ses_id}...", Fore.CYAN)
+        # Hoàn tất ấp trứng
+        log(f"ACC{self.acc_id}_FINISH", f"🐣 Hoàn tất ấp trứng phiên #{ses_id}...", Fore.CYAN)
         for attempt in range(4):
             try:
-                r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=15)
+                r_fin = self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=15)
                 if r_fin.status_code == 200:
                     d_fin = r_fin.json()
                     if d_fin.get("ok"):
                         st = d_fin.get("state", {})
                         hen_count = len(st.get("fish", []))
                         power = st.get("power", {}).get("total", 0)
-                        log(f"ACC{self.acc_id}_HATCHED", f"🎉 ẤP TRỨNG THÀNH CÔNG! Đàn gà hiện tại: {hen_count} con | Năng suất: {power} ⚡ (trứng/giờ)!", Fore.GREEN)
-                        return True, 5
+                        log(f"ACC{self.acc_id}_HATCHED", f"🎉 ẤP TRỨNG THÀNH CÔNG! Đàn gà: {hen_count} con | Năng suất: {power} ⚡ (trứng/giờ)!", Fore.GREEN)
+                        # Gom trứng ngay sau khi nở
+                        self.claim_basket(st)
+                        return True, 1.0
                     else:
                         code = d_fin.get("code")
                         if code in ("session_closed", "fish_already_granted"):
-                            return True, 5
-                time.sleep(2.0)
-            except Exception as e:
-                time.sleep(2.0)
+                            return True, 1.0
+                time.sleep(1.5)
+            except Exception:
+                time.sleep(1.5)
 
-        return False, 20
+        return False, 10
 
     def print_status_dashboard(self, state=None):
         if not state:
@@ -502,20 +502,18 @@ def run_bot(acc_id=1, max_runtime=17500):
     start_time = time.time()
     bot = EggramBot(acc_id=acc_id)
 
-    log(f"MAIN_ACC{acc_id}", f"🚀 KHỞI ĐỘNG AUTO EGGRAM 24/7 CHO TÀI KHOẢN {acc_id}", Fore.GREEN)
+    log(f"MAIN_ACC{acc_id}", f"🚀 KHỞI ĐỘNG AUTO EGGRAM SIÊU TỐC 24/7 CHO TÀI KHOẢN {acc_id}", Fore.GREEN)
     
-    # Init auth
     state = bot.auth_state()
     if not state:
         log(f"MAIN_ACC{acc_id}", "Không thể kết nối trò chơi. Đang thử lại...", Fore.RED)
-        time.sleep(5)
+        time.sleep(3)
         state = bot.auth_state()
 
     bot.print_status_dashboard(state)
     bot.check_tasks(state)
     bot.claim_basket(state)
 
-    last_basket_check = 0
     last_status_print = 0
 
     while True:
@@ -539,21 +537,15 @@ def run_bot(acc_id=1, max_runtime=17500):
             bot.print_status_dashboard()
             last_status_print = now_sec
 
-        # Kiểm tra giỏ trứng & nhiệm vụ mỗi 3-5 phút
-        if now_sec - last_basket_check > 240:
-            bot.claim_basket()
-            bot.check_tasks()
-            last_basket_check = now_sec
-
-        # Ấp Trứng Vàng Tier 3
+        # Ấp Trứng Vàng Tier 3 Tối ưu Siêu Tốc
         try:
             ok, sleep_sec = bot.hatch_egg_chain()
         except Exception as e:
             log(f"MAIN_ACC{acc_id}_LOOP_ERR", f"Lỗi chu trình ấp trứng: {e}", Fore.RED)
-            sleep_sec = 30
+            sleep_sec = 15
 
-        # Nghỉ ngơi giữa các lượt
-        sleep_sec = max(5, int(sleep_sec))
+        # Nghỉ ngơi chính xác theo cooldown
+        sleep_sec = max(1.0, float(sleep_sec))
         time.sleep(sleep_sec)
 
 

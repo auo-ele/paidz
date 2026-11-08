@@ -396,7 +396,7 @@ class RedRigBot:
                         except Exception: pass
 
                     log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(8.5)
+                    time.sleep(5.2)
 
                     if reward_url:
                         try: requests.get(reward_url, headers=ad_headers, timeout=10)
@@ -404,7 +404,7 @@ class RedRigBot:
                     time.sleep(3.5)
                 except Exception as e_adv:
                     log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(8.5)
+                    time.sleep(5.2)
 
                 counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
                 if counted_s1:
@@ -418,7 +418,7 @@ class RedRigBot:
             if "gigapub" in chain and start_step <= 2:
                 step_idx = chain.index("gigapub") + 1
                 log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                time.sleep(5.2)
                 counted_s2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
                 if counted_s2:
                     log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
@@ -429,7 +429,7 @@ class RedRigBot:
             if "monetag" in chain and start_step <= 3:
                 step_idx = chain.index("monetag") + 1
                 log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                time.sleep(5.2)
                 counted_s3, _ = self.report_step(ses_id, "monetag", max_tries=14)
                 if counted_s3:
                     log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
@@ -580,7 +580,7 @@ class RedRigBot:
                         except Exception: pass
 
                     log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(8.5)
+                    time.sleep(5.2)
 
                     if reward_url:
                         try: requests.get(reward_url, headers=ad_headers, timeout=10)
@@ -588,7 +588,7 @@ class RedRigBot:
                     time.sleep(3.5)
                 except Exception as e_adv:
                     log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(8.5)
+                    time.sleep(5.2)
 
                 c1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
                 if c1:
@@ -597,7 +597,7 @@ class RedRigBot:
             # Step 2: Gigapub
             if "gigapub" in chain and start_step <= 2:
                 log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                time.sleep(5.2)
                 c2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
                 if c2:
                     log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
@@ -605,7 +605,7 @@ class RedRigBot:
             # Step 3: Monetag
             if "monetag" in chain and start_step <= 3:
                 log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                time.sleep(5.2)
                 c3, _ = self.report_step(ses_id, "monetag", max_tries=14)
                 if c3:
                     log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)

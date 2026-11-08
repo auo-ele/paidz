@@ -370,14 +370,14 @@ class GramstoneBot:
                         except Exception: pass
                     
                     log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s theo quy định card_min_step_sec)...", Fore.YELLOW)
-                    time.sleep(8.5)
+                    time.sleep(5.2)
 
                     if reward_u:
                         try: requests.get(reward_u, headers=ad_headers, timeout=8)
                         except Exception: pass
             except Exception as e:
                 log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
-                time.sleep(8.5)
+                time.sleep(5.2)
 
             # Chờ Adsgram server verification
             log("STEP1_ADSGRAM", "Đang chờ xác nhận máy chủ Adsgram (/api/ads/adsgram-status)...", Fore.YELLOW)
@@ -419,7 +419,7 @@ class GramstoneBot:
 
             # --- BƯỚC 2: GIGAPUB ---
             log("STEP2_GIGAPUB", "Bước 2/3: Đang xem QC Gigapub (8.5s chuẩn quy định)...", Fore.YELLOW)
-            time.sleep(8.5)
+            time.sleep(5.2)
             counted_s2 = False
             for step_try in range(6):
                 try:
@@ -438,7 +438,7 @@ class GramstoneBot:
 
             # --- BƯỚC 3: MONETAG ---
             log("STEP3_MONETAG", "Bước 3/3: Đang xem QC Monetag (8.5s chuẩn quy định)...", Fore.YELLOW)
-            time.sleep(8.5)
+            time.sleep(5.2)
             counted_s3 = False
             for step_try in range(6):
                 try:
