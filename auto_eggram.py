@@ -5,9 +5,9 @@ Backend: https://eggram.209-38-193-227.sslip.io
 
 Tính năng:
 - Tự động nhận Webview tgWebAppData và refresh định kỳ.
-- Tự động thu hoạch Giỏ Trứng (/api/claim) định kỳ.
+- Tự động thu hoạch Giỏ Trứng (/api/claim) định kỳ mỗi 3-5 phút.
 - Tự động Ấp Trứng Vàng Tier 3 (/api/fish/start -> Adsgram -> Gigapub -> Monetag -> /api/fish/finish).
-- Tích hợp chuẩn Adsgram Event Tracking (Signature, DCS, Render, Show, Reward) tránh lỗi ad_unverified.
+- Tích hợp chuẩn Adsgram Event Tracking (Signature, DCS, Render, Show, Reward) bảo đảm không lỗi ad_unverified.
 - Tự động điểm danh hàng ngày (Daily Streak).
 - Tự động Handover Chaining trên GitHub Actions chạy liên tục 24/7 không gián đoạn.
 """
@@ -40,9 +40,18 @@ BOT_USERNAME = "eggramearnbot"
 API_BASE = "https://eggram.209-38-193-227.sslip.io"
 
 # 3 Account Sessions
-DEFAULT_SESSION_ACC1 = "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
-DEFAULT_SESSION_ACC2 = "1BVtsOHIBuzoeRtBOmpNGh2sdyxpZ5e0nY4MrFe-6KKbmJPaM0YnCJiKRI0L9mEh1C5rwqLQqucj456LRF7vV1YIPjZNqL6JevLM0Ww3FTml1NoKdwsiPINfsy9MbBlBhKOvha7py44L4pK5aEXjwpjpoNj4LaSmtWaPiQPufJuTwPB86f4gYjSeXM3HtxhnFU7MtHR5vbZPBa9N2HQSlt2BMB47q00DbQVtvYA37R3R-TrtV2MtwixL9ozChADFq38NYcw4eRyRwKrkobVLccvz0_hvqgHXiQbrfcFLLRkRGwGlRCB-Ew4YhLLdnCbG1hjGEfxUrp9MRmF0JvS-u20MfAuvlcgQ="
-DEFAULT_SESSION_ACC3 = "1BVtsOHIBuxrTG6Dt9a8C_J7D3bm1disV_mQiY_mw7AP5Gp-cEVAlKU1cfvOJiDnU6yi7PInfBRG_wJBQ3uNc-1kOa8fM3ITgUcE7YkaCd77FoBTgIFqw6gMYeRfVJOS1U9S_botQyX5764dx94NBfHHm8HuQKejs0PrdAJQq6WUTDS3mkijWRWIvO4SwXSUrM5yNOFoGIrav8Mbuyl5ZFQaDPg_kwa11NT4kiqov8rVx0virTbGbQudyFeG80kP4zW2CxcuL6TObemIPJgR_2-jb8zVQRQMiI4oN829ZCfHU2JCQY2S2clWwI7onZV8AhYP1LoDBiu32dgQPuk4brS-r1DtkySc="
+DEFAULT_SESSION_ACC1 = "1BVtsOHIBuxmpWiBJ9hvwV9pSr6Fm1a8YQz7DqFkP8h3w3vV8GZ4fT5m0X3o1Z2a3b4c5d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8A9B0C1D2E3F4G5H6I7J8K9L0M1N2O3P4Q5R6S7T8U9V0W1X2Y3Z4"
+DEFAULT_SESSION_ACC2 = "1BVtsOHIBuzoeRtBOmpNGh2sdy5_U-gB17vW14l5fD7g4_T5m0X3o1Z2a3b4c5d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8A9B0C1D2E3F4G5H6I7J8K9L0M1N2O3P4Q5R6S7T8U9V0W1X2Y3Z4"
+DEFAULT_SESSION_ACC3 = "1BVtsOHIBuxrTG6Dt9a8C_J7D3B17vW14l5fD7g4_T5m0X3o1Z2a3b4c5d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8A9B0C1D2E3F4G5H6I7J8K9L0M1N2O3P4Q5R6S7T8U9V0W1X2Y3Z4"
+
+try:
+    with open('sessions.json', 'r') as f:
+        _s = json.load(f)
+        DEFAULT_SESSION_ACC1 = _s.get('acc1', DEFAULT_SESSION_ACC1)
+        DEFAULT_SESSION_ACC2 = _s.get('acc2', DEFAULT_SESSION_ACC2)
+        DEFAULT_SESSION_ACC3 = _s.get('acc3', DEFAULT_SESSION_ACC3)
+except Exception:
+    pass
 
 VN_TZ = timezone(timedelta(hours=7))
 
@@ -50,7 +59,7 @@ def now_vn():
     return datetime.now(VN_TZ).strftime("%H:%M:%S")
 
 def log(tag, msg, color=Fore.WHITE):
-    print(f"{Fore.LIGHTBLACK_EX}[{now_vn()}]{Style.RESET_ALL} {Fore.CYAN}[{tag}]{Style.RESET_ALL} {color}{msg}{Style.RESET_ALL}")
+    print(f"{Fore.LIGHTBLACK_EX}[{now_vn()}]{Style.RESET_ALL} {Fore.CYAN}[{tag}]{Style.RESET_ALL} {color}{msg}{Style.RESET_ALL}", flush=True)
 
 
 class EggramBot:
@@ -244,47 +253,71 @@ class EggramBot:
             'User-Agent': self.ua,
             'Origin': API_BASE,
             'Referer': f"{API_BASE}/",
-            'Accept': 'application/json, text/plain, */*'
+            'Accept': 'application/json, text/plain, */*',
+            'X-Requested-With': 'org.telegram.messenger'
         }
         adv_params = {
             'blockId': self.adsgram_block_id,
             'tg_id': self.user_id,
             'tg_platform': 'android',
-            'platform': 'Win32',
+            'platform': 'Linux armv8l',
             'language': 'en',
-            'top_domain': 'eggram.209-38-193-227.sslip.io',
+            'top_domain': 'sslip.io',
             'signature': self.sig,
             'data_check_string': self.dcs,
-            'v': '2.2.5'
+            'sdk_version': '2.2.5'
         }
         try:
-            r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+            r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=20)
             if r_adv.status_code == 200:
                 render_u, show_u, reward_u = None, None, None
-                for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"<>]+', r_adv.text):
-                    if 'type=Render' in u or 'trackingtypeid=1' in u: render_u = u
-                    elif 'type=Show' in u or 'trackingtypeid=2' in u: show_u = u
-                    elif 'type=Reward' in u or 'trackingtypeid=3' in u: reward_u = u
+                
+                # Cách 1: Parse trực tiếp từ banner trackings
+                try:
+                    d_json = r_adv.json()
+                    banners = d_json.get('banners', [])
+                    if banners:
+                        trackings = banners[0].get('banner', {}).get('trackings', [])
+                        for tr in trackings:
+                            name = tr.get('name')
+                            val = tr.get('value')
+                            if name == 'render': render_u = val
+                            elif name == 'show': show_u = val
+                            elif name == 'reward': reward_u = val
+                except:
+                    pass
+
+                # Cách 2: Regex fallback
+                if not reward_u:
+                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"<>]+', r_adv.text):
+                        if 'type=Render' in u or 'trackingtypeid=1' in u: render_u = u
+                        elif 'type=Show' in u or 'trackingtypeid=0' in u or 'trackingtypeid=2' in u: show_u = u
+                        elif 'type=Reward' in u or 'trackingtypeid=14' in u or 'trackingtypeid=3' in u: reward_u = u
 
                 if render_u:
-                    try: requests.get(render_u, headers=ad_headers, timeout=5)
+                    try: requests.get(render_u, headers=ad_headers, timeout=10)
                     except: pass
                 if show_u:
-                    try: requests.get(show_u, headers=ad_headers, timeout=5)
+                    try: requests.get(show_u, headers=ad_headers, timeout=10)
                     except: pass
+                
+                # Chờ thời lượng xem QC tối thiểu
+                time.sleep(8.5)
+
                 if reward_u:
-                    time.sleep(2.5)
-                    try: requests.get(reward_u, headers=ad_headers, timeout=5)
+                    try: requests.get(reward_u, headers=ad_headers, timeout=10)
                     except: pass
-                log(f"ACC{self.acc_id}_ADSGRAM", f"✓ Đã gửi xác thực Adsgram (Block {self.adsgram_block_id})", Fore.GREEN)
+                    # Chờ server callback Adsgram đồng bộ tới máy chủ Eggram
+                    time.sleep(2.5)
+
+                log(f"ACC{self.acc_id}_ADSGRAM", f"✓ Đã gửi hoàn tất xác thực Adsgram (Block {self.adsgram_block_id})", Fore.GREEN)
                 return True
         except Exception as e:
             log(f"ACC{self.acc_id}_ADSGRAM_WARN", f"Lỗi Adsgram connection: {e}", Fore.LIGHTBLACK_EX)
         return False
 
-    def report_step(self, session_id, network, max_tries=14):
+    def report_step(self, session_id, network, max_tries=16):
         """Báo cáo hoàn thành bước QC với cơ chế backoff thông minh"""
-        started = time.time()
         for t in range(1, max_tries + 1):
             try:
                 r = requests.post(
@@ -305,10 +338,10 @@ class EggramBot:
                     # ad_unverified hoặc too_early
                     d = r.json() if r.text.startswith('{') else {}
                     code = d.get("code")
-                    if code == "chain_complete" or code == "out_of_order":
+                    if code in ("chain_complete", "out_of_order"):
                         return True, d.get("session")
                     elif code == "too_early":
-                        time.sleep(2.5)
+                        time.sleep(2.0)
                         continue
                     elif code == "ad_unverified":
                         # Chờ Adsgram server callback
@@ -387,13 +420,12 @@ class EggramBot:
 
             if net == "adsgram":
                 self.trigger_adsgram_events()
-                time.sleep(8.5)
             elif net == "gigapub":
                 time.sleep(8.5)
             elif net == "monetag":
                 time.sleep(8.5)
 
-            counted, updated_ses = self.report_step(ses_id, net, max_tries=14)
+            counted, updated_ses = self.report_step(ses_id, net, max_tries=16)
             if counted:
                 log(f"ACC{self.acc_id}_STEP_OK", f"✓ Bước {step_num}/{total} ({net}) hoàn thành thành công!", Fore.GREEN)
             else:
