@@ -385,6 +385,11 @@ class EggramBot:
                 chain = open_ses.get("chain", chain)
                 start_step = open_ses.get("steps_done", 0)
                 log(f"ACC{self.acc_id}_HATCH", f"Phát hiện ca ấp trứng #{ses_id} đang mở (Bước {start_step}/{len(chain)}). Tiếp tục...", Fore.CYAN)
+            else:
+                log(f"ACC{self.acc_id}_HATCH", f"Ca ấp trứng cũ #{open_ses.get('id')} đã hết hạn. Đang dọn dẹp...", Fore.YELLOW)
+                try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                except Exception: pass
+                time.sleep(1.5)
 
         # Nếu chưa có session, kiểm tra chính xác thời gian cooldown
         if not ses_id:
@@ -441,8 +446,8 @@ class EggramBot:
             if counted:
                 log(f"ACC{self.acc_id}_STEP_OK", f"✓ Bước {step_num}/{total} ({net}) hoàn tất!", Fore.GREEN)
             else:
-                log(f"ACC{self.acc_id}_STEP_FAIL", f"Chưa xác nhận được bước {step_num} ({net}). Sẽ thử lại vòng sau.", Fore.YELLOW)
-                return False, 5
+                log(f"ACC{self.acc_id}_STEP_FAIL", f"Chưa xác nhận được bước {step_num} ({net}). Tiến hành ấp ngay gà mới...", Fore.YELLOW)
+                break
 
         # Hoàn tất ấp trứng
         log(f"ACC{self.acc_id}_FINISH", f"🐣 Hoàn tất ấp trứng phiên #{ses_id}...", Fore.CYAN)
@@ -461,7 +466,7 @@ class EggramBot:
                         return True, 1.0
                     else:
                         code = d_fin.get("code")
-                        if code in ("session_closed", "fish_already_granted"):
+                        if code in ("session_closed", "fish_already_granted", "no_steps"):
                             return True, 1.0
                 time.sleep(1.5)
             except Exception:

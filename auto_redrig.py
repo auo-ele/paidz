@@ -442,7 +442,9 @@ class RedRigBot:
                 if counted_s1:
                     log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
                 else:
-                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Lưu phiên để lượt kế tiếp hoàn thành...", Fore.YELLOW)
+                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Kết thúc phiên an toàn tránh kẹt...", Fore.YELLOW)
+                    try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    except Exception: pass
                     return state
 
             if "gigapub" in chain and start_step <= 2:
@@ -561,7 +563,9 @@ class RedRigBot:
         # 3. Khởi tạo phiên Unlock Rack nếu chưa có session
         if not ses_id:
             log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
-            r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
+            target_rack = ru.get("expired_idx") if ru.get("expired_idx") is not None else "new"
+            log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa/tái kích hoạt Rack #{target_rack} (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
+            r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": target_rack}, timeout=10)
             if r_start.status_code == 200:
                 d = r_start.json()
                 if d.get("ok"):
@@ -758,14 +762,19 @@ async def run_loop_247(bot_instance, interval_mins=0):
             bot_instance.check_and_claim_streak(state)
             last_vault_check = now
 
-        # 3.2. Cày Card GPU hay Mở Khóa Rack Mới
+        # 3.2. Cày Card GPU hay Mở Khóa Rack Mới (Ưu tiên Rack hết hạn để khôi phục công suất!)
         racks = state.get("racks", [])
         has_fit = any(any(r.get("fits", {}).values()) for r in racks)
         ru = state.get("rack_unlock", {})
+        expired_rack = ru.get("expired_idx")
+        has_expired_rack = (expired_rack is not None) or any(r.get("active") is False and r.get("idx") >= 2 for r in racks)
         can_new_rack = ru.get("can_new", False)
 
         ad_cycle += 1
-        if has_fit:
+        if has_expired_rack:
+            log("CONTINUOUS", f"⚡ [CA #{ad_cycle}] Phát hiện Rack #{expired_rack or 2} hết hạn (mất công suất GPU)! Ưu tiên cày mở lại Rack...", Fore.MAGENTA)
+            state = bot_instance.boost_rack_unlock_chain(state)
+        elif has_fit:
             log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Cày Card GPU (+12⚡)...", Fore.CYAN)
             state = bot_instance.boost_moonpool_gpu_chain(state)
         elif can_new_rack:
