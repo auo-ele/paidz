@@ -237,6 +237,8 @@ class RedRigBot:
                 if d.get("ok") and d.get("counted"):
                     return True, d.get("session")
                 code = d.get("code", "")
+                if code in ["out_of_order", "chain_complete", "session_closed", "fish_already_granted"]:
+                    return True, d.get("session")
                 if code == "too_early":
                     retry_ms = d.get("retry_in_ms") or d.get("data", {}).get("retry_in_ms", 1200)
                     wait_s = min(6.0, float(retry_ms) / 1000.0) + 0.35
