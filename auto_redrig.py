@@ -222,7 +222,7 @@ class RedRigBot:
                 log("CLAIM_ERR", f"Lỗi thu hoạch két sắt: {e}", Fore.RED)
         return state
 
-    def report_step(self, session_id, network, max_tries=14):
+    def report_step(self, session_id, network, max_tries=18):
         """Báo cáo hoàn thành bước QC chuẩn frontend redrig_app.js"""
         started = time.time()
         for attempt in range(max_tries):
@@ -238,18 +238,18 @@ class RedRigBot:
                     return True, d.get("session")
                 code = d.get("code", "")
                 if code == "too_early":
-                    retry_ms = d.get("data", {}).get("retry_in_ms", 1000)
-                    wait_s = min(6.0, float(retry_ms) / 1000.0) + 0.25
+                    retry_ms = d.get("retry_in_ms") or d.get("data", {}).get("retry_in_ms", 1200)
+                    wait_s = min(6.0, float(retry_ms) / 1000.0) + 0.35
                     time.sleep(wait_s)
                     continue
                 if code == "ad_unverified":
-                    if time.time() - started > 30.0:
-                        log("STEP_RETRY", f"[{network}] Adsgram verify timeout (30s)", Fore.YELLOW)
+                    if time.time() - started > 45.0:
+                        log("STEP_RETRY", f"[{network}] Adsgram verify timeout (45s)", Fore.YELLOW)
                         return False, None
-                    time.sleep(2.0)
+                    time.sleep(2.5)
                     continue
                 if code in ["rate_limited", "server_error"] and attempt < max_tries - 1:
-                    time.sleep(1.5)
+                    time.sleep(2.0)
                     continue
                 log("STEP_DEBUG", f"[{network}] Thử #{attempt+1}: HTTP {r.status_code} code={code} err={d.get('error', '')}", Fore.YELLOW)
                 time.sleep(2.0)
@@ -314,16 +314,23 @@ class RedRigBot:
                     continue
 
                 log("GPU_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Card GPU Tier {tier} (+{c_info.get('power')}⚡ Power)...", Fore.CYAN)
-                try:
-                    r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
-                except Exception as e:
-                    log("GPU_WARN", f"Lỗi kết nối khi gọi /api/fish/start Tier {tier}: {e}", Fore.YELLOW)
-                    continue
+                time.sleep(2.0)
+                r_start = None
+                for _stry in range(3):
+                    try:
+                        r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
+                        if r_start.status_code == 429:
+                            log("GPU_COOLDOWN", f"⚠️ Tier {tier} bị 429 rate limit. Chờ 5s thử lại...", Fore.YELLOW)
+                            time.sleep(5.0)
+                            continue
+                        break
+                    except Exception as e:
+                        log("GPU_WARN", f"Lỗi kết nối khi gọi /api/fish/start Tier {tier}: {e}", Fore.YELLOW)
+                        time.sleep(2.0)
                 
-                if r_start.status_code == 429:
-                    log("GPU_COOLDOWN", f"⚠️ Máy chủ giới hạn tần suất gọi API (HTTP 429). Tạm nghỉ 45s để hồi chiêu...", Fore.YELLOW)
-                    time.sleep(45)
-                    return state
+                if not r_start or r_start.status_code == 429:
+                    log("GPU_COOLDOWN", f"⚠️ Tier {tier} tạm thời bị rate limit. Chuyển sang thử Tier khác...", Fore.YELLOW)
+                    continue
 
                 if r_start.status_code == 200:
                     d_start = r_start.json()
@@ -359,67 +366,72 @@ class RedRigBot:
             if "adsgram" in chain and start_step <= 1:
                 log("STEP1_ADSGRAM", f"Bước 1/{len(chain)}: Đang tải quảng cáo Adsgram (Block {block_id})...", Fore.YELLOW)
                 ad_headers = {
-                    'User-Agent': self.ua,
-                    'Origin': API_BASE,
-                    'Referer': f"{API_BASE}/",
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'org.telegram.messenger'
+                    "User-Agent": self.ua,
+                    "Origin": API_BASE,
+                    "Referer": f"{API_BASE}/",
+                    "Accept": "application/json",
+                    "X-Requested-With": "org.telegram.messenger"
                 }
                 adv_params = {
-                    'blockId': block_id,
-                    'tg_id': self.user_id,
-                    'tg_platform': 'android',
-                    'platform': 'Linux aarch64',
-                    'language': 'vi',
-                    'top_domain': 'sslip.io',
-                    'signature': self.sig,
-                    'data_check_string': self.dcs,
-                    'sdk_version': '2.2.5'
+                    "blockId": block_id,
+                    "tg_id": self.user_id,
+                    "tg_platform": "android",
+                    "platform": "Linux aarch64",
+                    "language": "vi",
+                    "top_domain": "sslip.io",
+                    "signature": self.sig,
+                    "data_check_string": self.dcs,
+                    "sdk_version": "2.2.5"
                 }
                 try:
-                    r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                    r_adv = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=12)
                     render_url, show_url, reward_url = None, None, None
                     if r_adv.status_code == 200:
-                        for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                            if 'trackingtypeid=1' in u or 'type=Render' in u:
-                                render_url = u
-                            elif 'trackingtypeid=2' in u or 'type=Show' in u:
-                                show_url = u
-                            elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
-                                reward_url = u
-
+                        try:
+                            d_adv = r_adv.json()
+                            trackings = d_adv.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
+                            for t in trackings:
+                                tn = t.get("name")
+                                tv = t.get("value")
+                                if tn == "render": render_url = tv
+                                elif tn == "show": show_url = tv
+                                elif tn == "reward": reward_url = tv
+                        except Exception: pass
+                        if not render_url or not reward_url:
+                            for u in re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r_adv.text):
+                                if "Render" in u or "trackingtypeid=1" in u:
+                                    render_url = u
+                                elif "Show" in u or "trackingtypeid=0" in u or "trackingtypeid=2" in u:
+                                    show_url = u
+                                elif "Reward" in u or "trackingtypeid=14" in u:
+                                    reward_url = u
                     if render_url:
                         try: requests.get(render_url, headers=ad_headers, timeout=8)
                         except Exception: pass
                     if show_url:
                         try: requests.get(show_url, headers=ad_headers, timeout=8)
                         except Exception: pass
-
                     log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(5.2)
-
+                    time.sleep(8.5)
                     if reward_url:
                         try: requests.get(reward_url, headers=ad_headers, timeout=10)
                         except Exception: pass
                     time.sleep(3.5)
                 except Exception as e_adv:
                     log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(5.2)
-
-                counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
+                    time.sleep(8.5)
+                counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=18)
                 if counted_s1:
                     log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
                 else:
-                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Huỷ ca để làm mới...", Fore.YELLOW)
-                    requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Lưu phiên để lượt kế tiếp hoàn thành...", Fore.YELLOW)
                     return state
 
-            # --- BƯỚC 2: GIGAPUB (nếu có trong chuỗi) ---
             if "gigapub" in chain and start_step <= 2:
                 step_idx = chain.index("gigapub") + 1
                 log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (8.5s)...", Fore.YELLOW)
-                time.sleep(5.2)
-                counted_s2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
+                time.sleep(8.5)
+                counted_s2, _ = self.report_step(ses_id, "gigapub", max_tries=18)
                 if counted_s2:
                     log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
                 else:
@@ -429,8 +441,8 @@ class RedRigBot:
             if "monetag" in chain and start_step <= 3:
                 step_idx = chain.index("monetag") + 1
                 log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (8.5s)...", Fore.YELLOW)
-                time.sleep(5.2)
-                counted_s3, _ = self.report_step(ses_id, "monetag", max_tries=14)
+                time.sleep(8.5)
+                counted_s3, _ = self.report_step(ses_id, "monetag", max_tries=18)
                 if counted_s3:
                     log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
                 else:
@@ -552,64 +564,66 @@ class RedRigBot:
             if "adsgram" in chain and start_step <= 1:
                 log("STEP1_ADSGRAM", f"Bước 1/3: Xem QC Adsgram (Block {block_id})...", Fore.YELLOW)
                 ad_headers = {
-                    'User-Agent': self.ua, 'Origin': API_BASE, 'Referer': f"{API_BASE}/",
-                    'Accept': 'application/json', 'X-Requested-With': 'org.telegram.messenger'
+                    "User-Agent": self.ua, "Origin": API_BASE, "Referer": f"{API_BASE}/",
+                    "Accept": "application/json", "X-Requested-With": "org.telegram.messenger"
                 }
                 adv_params = {
-                    'blockId': block_id, 'tg_id': self.user_id, 'tg_platform': 'android',
-                    'platform': 'Linux aarch64', 'language': 'vi', 'top_domain': 'sslip.io',
-                    'signature': self.sig, 'data_check_string': self.dcs, 'sdk_version': '2.2.5'
+                    "blockId": block_id, "tg_id": self.user_id, "tg_platform": "android",
+                    "platform": "Linux aarch64", "language": "vi", "top_domain": "sslip.io",
+                    "signature": self.sig, "data_check_string": self.dcs, "sdk_version": "2.2.5"
                 }
                 try:
-                    r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                    r_adv = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=12)
                     render_url, show_url, reward_url = None, None, None
                     if r_adv.status_code == 200:
-                        for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                            if 'trackingtypeid=1' in u or 'type=Render' in u:
-                                render_url = u
-                            elif 'trackingtypeid=2' in u or 'type=Show' in u:
-                                show_url = u
-                            elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
-                                reward_url = u
-
+                        try:
+                            d_adv = r_adv.json()
+                            trackings = d_adv.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
+                            for t in trackings:
+                                tn = t.get("name")
+                                tv = t.get("value")
+                                if tn == "render": render_url = tv
+                                elif tn == "show": show_url = tv
+                                elif tn == "reward": reward_url = tv
+                        except Exception: pass
+                        if not render_url or not reward_url:
+                            for u in re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r_adv.text):
+                                if "Render" in u or "trackingtypeid=1" in u:
+                                    render_url = u
+                                elif "Show" in u or "trackingtypeid=0" in u or "trackingtypeid=2" in u:
+                                    show_url = u
+                                elif "Reward" in u or "trackingtypeid=14" in u:
+                                    reward_url = u
                     if render_url:
                         try: requests.get(render_url, headers=ad_headers, timeout=8)
                         except Exception: pass
                     if show_url:
                         try: requests.get(show_url, headers=ad_headers, timeout=8)
                         except Exception: pass
-
                     log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                    time.sleep(5.2)
-
+                    time.sleep(8.5)
                     if reward_url:
                         try: requests.get(reward_url, headers=ad_headers, timeout=10)
                         except Exception: pass
                     time.sleep(3.5)
                 except Exception as e_adv:
                     log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
-                    time.sleep(5.2)
-
-                c1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
+                    time.sleep(8.5)
+                c1, _ = self.report_step(ses_id, "adsgram", max_tries=18)
                 if c1:
                     log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram thành công!", Fore.GREEN)
-
-            # Step 2: Gigapub
             if "gigapub" in chain and start_step <= 2:
                 log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (8.5s)...", Fore.YELLOW)
-                time.sleep(5.2)
-                c2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
+                time.sleep(8.5)
+                c2, _ = self.report_step(ses_id, "gigapub", max_tries=18)
                 if c2:
                     log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
-
-            # Step 3: Monetag
             if "monetag" in chain and start_step <= 3:
                 log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (8.5s)...", Fore.YELLOW)
-                time.sleep(5.2)
-                c3, _ = self.report_step(ses_id, "monetag", max_tries=14)
+                time.sleep(8.5)
+                c3, _ = self.report_step(ses_id, "monetag", max_tries=18)
                 if c3:
                     log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)
-
             # Finish
             r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
             if r_fin.get("ok"):

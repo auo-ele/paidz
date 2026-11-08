@@ -45,7 +45,7 @@ jobs:
           python auto_redrig.py --acc 3 --loop 15
 
       - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
-        if: always()
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |

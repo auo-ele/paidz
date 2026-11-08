@@ -43,7 +43,7 @@ jobs:
           python auto_eggram.py --acc 2 --runtime 17500
 
       - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
-        if: always()
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
