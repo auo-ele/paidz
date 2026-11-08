@@ -1,0 +1,52 @@
+name: Game 4 - Auto Eggram 24/7 (Acc 3 - phanhhyy)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Chạy dự phòng mỗi 6 giờ
+    - cron: '25 */6 * * *'
+
+concurrency:
+  group: eggram-acc3-run
+  cancel-in-progress: true
+
+jobs:
+  run-eggram-acc3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install telethon requests colorama urllib3
+
+      - name: Chay Auto Eggram 24/7 (Acc 3)
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          GITHUB_REPOSITORY: "auo-ele/paidz"
+          WORKFLOW_NAME: "game4_eggram_acc3.yml"
+          GH_PAT: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          python auto_eggram.py --acc 3 --runtime 17500
+
+      - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Kích hoạt ca kế tiếp cho Game 4 Eggram (Acc 3)..."
+          sleep 12
+          gh workflow run game4_eggram_acc3.yml --repo "${{ github.repository }}" || echo "Handover triggered."
