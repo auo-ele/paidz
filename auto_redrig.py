@@ -243,10 +243,10 @@ class RedRigBot:
                     time.sleep(wait_s)
                     continue
                 if code == "ad_unverified":
-                    if time.time() - started > 15.0:
-                        log("STEP_RETRY", f"[{network}] Adsgram verify timeout (15s)", Fore.YELLOW)
+                    if time.time() - started > 30.0:
+                        log("STEP_RETRY", f"[{network}] Adsgram verify timeout (30s)", Fore.YELLOW)
                         return False, None
-                    time.sleep(1.5)
+                    time.sleep(2.0)
                     continue
                 if code in ["rate_limited", "server_error"] and attempt < max_tries - 1:
                     time.sleep(1.5)
@@ -321,9 +321,9 @@ class RedRigBot:
                     continue
                 
                 if r_start.status_code == 429:
-                    log("GPU_COOLDOWN", f"⚠️ Tier {tier} bị máy chủ gắn cờ tần suất (HTTP 429). Tự động hạ xuống Tier thấp hơn...", Fore.YELLOW)
-                    time.sleep(2)
-                    continue
+                    log("GPU_COOLDOWN", f"⚠️ Máy chủ giới hạn tần suất gọi API (HTTP 429). Tạm nghỉ 45s để hồi chiêu...", Fore.YELLOW)
+                    time.sleep(45)
+                    return state
 
                 if r_start.status_code == 200:
                     d_start = r_start.json()
@@ -376,31 +376,35 @@ class RedRigBot:
                     'data_check_string': self.dcs,
                     'sdk_version': '2.2.5'
                 }
-                r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
-                render_url, show_url, reward_url = None, None, None
-                if r_adv.status_code == 200:
-                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                        if 'trackingtypeid=1' in u or 'type=Render' in u:
-                            render_url = u
-                        elif 'trackingtypeid=2' in u or 'type=Show' in u:
-                            show_url = u
-                        elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
-                            reward_url = u
+                try:
+                    r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                    render_url, show_url, reward_url = None, None, None
+                    if r_adv.status_code == 200:
+                        for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
+                            if 'trackingtypeid=1' in u or 'type=Render' in u:
+                                render_url = u
+                            elif 'trackingtypeid=2' in u or 'type=Show' in u:
+                                show_url = u
+                            elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
+                                reward_url = u
 
-                if render_url:
-                    try: requests.get(render_url, headers=ad_headers, timeout=8)
-                    except Exception: pass
-                if show_url:
-                    try: requests.get(show_url, headers=ad_headers, timeout=8)
-                    except Exception: pass
+                    if render_url:
+                        try: requests.get(render_url, headers=ad_headers, timeout=8)
+                        except Exception: pass
+                    if show_url:
+                        try: requests.get(show_url, headers=ad_headers, timeout=8)
+                        except Exception: pass
 
-                log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
+                    time.sleep(8.5)
 
-                if reward_url:
-                    try: requests.get(reward_url, headers=ad_headers, timeout=10)
-                    except Exception: pass
-                time.sleep(3.5)
+                    if reward_url:
+                        try: requests.get(reward_url, headers=ad_headers, timeout=10)
+                        except Exception: pass
+                    time.sleep(3.5)
+                except Exception as e_adv:
+                    log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
+                    time.sleep(8.5)
 
                 counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
                 if counted_s1:
@@ -556,31 +560,35 @@ class RedRigBot:
                     'platform': 'Linux aarch64', 'language': 'vi', 'top_domain': 'sslip.io',
                     'signature': self.sig, 'data_check_string': self.dcs, 'sdk_version': '2.2.5'
                 }
-                r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
-                render_url, show_url, reward_url = None, None, None
-                if r_adv.status_code == 200:
-                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                        if 'trackingtypeid=1' in u or 'type=Render' in u:
-                            render_url = u
-                        elif 'trackingtypeid=2' in u or 'type=Show' in u:
-                            show_url = u
-                        elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
-                            reward_url = u
+                try:
+                    r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                    render_url, show_url, reward_url = None, None, None
+                    if r_adv.status_code == 200:
+                        for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
+                            if 'trackingtypeid=1' in u or 'type=Render' in u:
+                                render_url = u
+                            elif 'trackingtypeid=2' in u or 'type=Show' in u:
+                                show_url = u
+                            elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
+                                reward_url = u
 
-                if render_url:
-                    try: requests.get(render_url, headers=ad_headers, timeout=8)
-                    except Exception: pass
-                if show_url:
-                    try: requests.get(show_url, headers=ad_headers, timeout=8)
-                    except Exception: pass
+                    if render_url:
+                        try: requests.get(render_url, headers=ad_headers, timeout=8)
+                        except Exception: pass
+                    if show_url:
+                        try: requests.get(show_url, headers=ad_headers, timeout=8)
+                        except Exception: pass
 
-                log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
-                time.sleep(8.5)
+                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
+                    time.sleep(8.5)
 
-                if reward_url:
-                    try: requests.get(reward_url, headers=ad_headers, timeout=10)
-                    except Exception: pass
-                time.sleep(3.5)
+                    if reward_url:
+                        try: requests.get(reward_url, headers=ad_headers, timeout=10)
+                        except Exception: pass
+                    time.sleep(3.5)
+                except Exception as e_adv:
+                    log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e_adv}", Fore.LIGHTBLACK_EX)
+                    time.sleep(8.5)
 
                 c1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
                 if c1:
