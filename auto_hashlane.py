@@ -43,6 +43,15 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.messages import RequestWebViewRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 
+from human_behavior import (
+    get_device_profile,
+    get_hashlane_device_fp,
+    handle_sleep_schedule_async,
+    check_sleep_window,
+    SessionBurstManager,
+    get_vn_time
+)
+
 init(autoreset=True)
 
 _raw_id = os.getenv("TELEGRAM_API_ID", "").strip()
@@ -73,7 +82,8 @@ def log(tag, msg, color=Fore.WHITE):
     print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<14}]{Style.RESET_ALL} {msg}")
 
 class HashLaneBot:
-    def __init__(self, string_session=None, session_path=None):
+    def __init__(self, acc_id=1, string_session=None, session_path=None):
+        self.acc_id = int(acc_id)
         self.string_session = string_session or STRING_SESSION
         self.session_path = session_path
         self.init_data = None
@@ -83,19 +93,10 @@ class HashLaneBot:
         self.gems = 0
         self.next_ad_at = 0
         
-        parts = [
-            "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36 Telegram-Android/11.5.0",
-            "vi-VN",
-            "384x854x24",
-            "2.8125",
-            "Asia/Ho_Chi_Minh",
-            "8",
-            "8",
-            "Linux armv8l",
-            "android"
-        ]
-        self.ua = parts[0]
-        self.dev_fp = hashlib.sha256("|".join(parts).encode('utf-8')).hexdigest()
+        dev = get_device_profile(self.acc_id)
+        self.device_name = dev["device_name"]
+        self.ua = dev["ua"]
+        self.dev_fp = get_hashlane_device_fp(self.acc_id)
 
     async def fetch_tg_init_data(self):
         log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData HashLane...", Fore.CYAN)
@@ -505,22 +506,53 @@ async def run_loop_247(bot_instance, interval_mins=15):
     max_runtime = int(raw_rt) if raw_rt.isdigit() else 17500
     start_time = time.time()
     cycle = 1
+    
+    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 45-75p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
+    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75)
+    
     while True:
-        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (HashLane PRO) ===", Fore.MAGENTA)
+        # 1. Kiểm tra Giờ ngủ tự nhiên (00:30 - 05:15 VN)
+        slept = await handle_sleep_schedule_async(log_func=lambda msg: log("SLEEP", msg, Fore.MAGENTA))
+        if slept:
+            burst_mgr.start_new_burst()
+
+        elapsed = time.time() - start_time
+        if elapsed >= max_runtime:
+            log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
+            wf_target = f"game2_hashlane_acc{bot_instance.acc_id}.yml" if bot_instance.acc_id > 1 else "game2_hashlane.yml"
+            trigger_next_shift(wf_target)
+            break
+
+        # 2. Hết phiên chơi -> Nghỉ giải lao tự nhiên (Human Break)
+        if burst_mgr.is_burst_finished():
+            break_sec = burst_mgr.get_break_duration()
+            log("HUMAN_BREAK", f"☕ [PHIÊN #{burst_mgr.burst_count} XONG] Đóng app, nghỉ ngơi tự nhiên {break_sec//60} phút...", Fore.CYAN)
+            
+            slept_during_break = 0
+            while slept_during_break < break_sec:
+                in_sleep, _ = check_sleep_window()
+                if in_sleep:
+                    await handle_sleep_schedule_async(log_func=lambda msg: log("SLEEP", msg, Fore.MAGENTA))
+                    break
+                step = min(60, break_sec - slept_during_break)
+                await asyncio.sleep(step)
+                slept_during_break += step
+            
+            log("HUMAN_BREAK", f"📱 [MỞ LẠI APP] Bắt đầu phiên chơi mới #{burst_mgr.burst_count + 1}...", Fore.GREEN)
+            burst_mgr.start_new_burst()
+            continue
+
+        # 3. Trong phiên chơi
+        log("LOOP", f"🌀 === BẮT ĐẦU LƯỢT #{cycle} ({bot_instance.device_name}) ===", Fore.MAGENTA)
         try:
             await bot_instance.run_cycle()
         except Exception as e:
             log("CYCLE_ERR", f"Lỗi chu kỳ #{cycle}: {e}", Fore.RED)
         
         cycle += 1
-        elapsed = time.time() - start_time
-        if elapsed >= max_runtime:
-            log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
-            trigger_next_shift("game2_hashlane.yml")
-            break
-        
-        log("LOOP", f"⏳ Nghỉ {interval_mins} phút trước chu kỳ tiếp theo (Đã trực {elapsed//60}m)...", Fore.YELLOW)
-        await asyncio.sleep(interval_mins * 60)
+        sub_wait = random.randint(480, 720)
+        log("LOOP", f"⏳ Giãn cách {sub_wait//60} phút trước lượt tiếp theo trong phiên...", Fore.YELLOW)
+        await asyncio.sleep(sub_wait)
 
 async def main():
     import argparse
@@ -542,7 +574,7 @@ async def main():
   Acc: {args.acc} | Tự động Thu Hoạch Nhân Đôi (2X) | Cày Gems Miễn Phí | Gia Hạn Mỏ
 =============================================================================
     """ + Style.RESET_ALL)
-    bot = HashLaneBot(string_session=session_str, session_path=session_file)
+    bot = HashLaneBot(acc_id=args.acc, string_session=session_str, session_path=session_file)
     if args.loop > 0:
         await run_loop_247(bot, interval_mins=args.loop)
     else:

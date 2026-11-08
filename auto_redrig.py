@@ -40,6 +40,14 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import RequestWebViewRequest
 
+from human_behavior import (
+    get_device_profile,
+    handle_sleep_schedule_async,
+    check_sleep_window,
+    SessionBurstManager,
+    get_vn_time
+)
+
 urllib3.disable_warnings()
 init(autoreset=True)
 
@@ -71,7 +79,8 @@ def log(tag, msg, color=Fore.WHITE):
     print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<14}]{Style.RESET_ALL} {msg}", flush=True)
 
 class RedRigBot:
-    def __init__(self, string_session=None, session_path=None):
+    def __init__(self, acc_id=1, string_session=None, session_path=None):
+        self.acc_id = int(acc_id)
         self.string_session = string_session or STRING_SESSION
         self.session_path = session_path
         self.init_data = None
@@ -84,11 +93,10 @@ class RedRigBot:
         self.balance = "0.0"
         self.power = 0
         self.earn_h = "0"
-        self.ua = (
-            "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 "
-            "Mobile Safari/537.36 Telegram-Android/11.5.0"
-        )
+        dev = get_device_profile(self.acc_id)
+        self.device_name = dev["device_name"]
+        self.ua = dev["ua"]
+        self.platform = dev["platform"]
 
     async def fetch_tg_init_data(self):
         log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData REDRIG tươi mới...", Fore.CYAN)
@@ -694,35 +702,55 @@ async def run_loop_247(bot_instance, interval_mins=0):
     last_vault_check = 0
     ad_cycle = 0
     
-    log("CONTINUOUS", "🔥 CHẾ ĐỘ CÀY QC REDRIG (GPU & MỞ RACK) LIÊN TỤC 24/7 ĐÃ BẬT!", Fore.GREEN)
+    log("HUMAN_ENGINE", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 45-75p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
+    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75)
     
-    state = await bot_instance.get_valid_state()
-    if not state:
-        log("INIT_ERR", "Không thể lấy state ban đầu.", Fore.RED)
-        return
-
     while True:
+        # 1. Kiểm tra Giờ ngủ tự nhiên (00:30 - 05:15 VN)
+        slept = await handle_sleep_schedule_async(log_func=lambda msg: log("SLEEP", msg, Fore.MAGENTA))
+        if slept:
+            burst_mgr.start_new_burst()
+
         elapsed = time.time() - start_time
         if elapsed >= max_runtime:
             log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
-            trigger_next_shift("game3_redrig.yml")
+            wf_target = f"game3_redrig_acc{bot_instance.acc_id}.yml" if bot_instance.acc_id > 1 else "game3_redrig.yml"
+            trigger_next_shift(wf_target)
             break
 
+        # 2. Hết phiên chơi -> Nghỉ giải lao tự nhiên (Human Break)
+        if burst_mgr.is_burst_finished():
+            break_sec = burst_mgr.get_break_duration()
+            log("HUMAN_BREAK", f"☕ [PHIÊN #{burst_mgr.burst_count} XONG] Đóng app, nghỉ ngơi tự nhiên {break_sec//60} phút...", Fore.CYAN)
+            
+            slept_during_break = 0
+            while slept_during_break < break_sec:
+                in_sleep, _ = check_sleep_window()
+                if in_sleep:
+                    await handle_sleep_schedule_async(log_func=lambda msg: log("SLEEP", msg, Fore.MAGENTA))
+                    break
+                step = min(60, break_sec - slept_during_break)
+                await asyncio.sleep(step)
+                slept_during_break += step
+            
+            log("HUMAN_BREAK", f"📱 [MỞ LẠI APP] Bắt đầu phiên chơi mới #{burst_mgr.burst_count + 1}...", Fore.GREEN)
+            burst_mgr.start_new_burst()
+            continue
+
         now = time.time()
-        # Đảm bảo luôn lấy state tươi mới, tự động re-auth từ Telethon nếu token hết hạn
         state = await bot_instance.get_valid_state()
         if not state:
             log("RETRY", "Chờ 15s trước khi thử lại kết nối...", Fore.YELLOW)
             await asyncio.sleep(15)
             continue
 
-        # 1. Thu hoạch Két Sắt TON & Check Daily Streak định kỳ mỗi 3-5 phút
+        # 3.1. Thu hoạch Két Sắt TON & Check Daily Streak định kỳ mỗi 3-5 phút
         if now - last_vault_check >= 180:
             state = bot_instance.check_and_claim_vault(state)
             bot_instance.check_and_claim_streak(state)
             last_vault_check = now
 
-        # 2. XÁC ĐỊNH CÀY CARD GPU HAY MỞ KHÓA RACK MỚI
+        # 3.2. Cày Card GPU hay Mở Khóa Rack Mới
         racks = state.get("racks", [])
         has_fit = any(any(r.get("fits", {}).values()) for r in racks)
         ru = state.get("rack_unlock", {})
@@ -730,20 +758,19 @@ async def run_loop_247(bot_instance, interval_mins=0):
 
         ad_cycle += 1
         if has_fit:
-            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Tiến hành cày Card GPU (+12⚡)...", Fore.CYAN)
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Cày Card GPU (+12⚡)...", Fore.CYAN)
             state = bot_instance.boost_moonpool_gpu_chain(state)
         elif can_new_rack:
-            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack kín 100% -> Tiến hành cày QC mở khóa Rack mới...", Fore.MAGENTA)
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack kín 100% -> Cày mở Rack mới...", Fore.MAGENTA)
             state = bot_instance.boost_rack_unlock_chain(state)
         else:
             log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Đang vận hành tối đa công suất.", Fore.GREEN)
 
-        # Kiểm tra Streak sau mỗi ca xem QC
         bot_instance.check_and_claim_streak(state)
 
-        # 3. NGHỈ COOLDOWN THÔNG MINH TRƯỚC CA TIẾP THEO
-        log("CONTINUOUS", "⏳ Chờ hồi chiêu 62s trước ca cày quảng cáo tiếp theo...", Fore.LIGHTBLACK_EX)
-        await asyncio.sleep(62)
+        # 3.3. Nghỉ Cooldown giữa các lượt xem QC trong phiên
+        log("CONTINUOUS", "⏳ Chờ hồi chiêu 65s trước lượt tiếp theo trong phiên...", Fore.LIGHTBLACK_EX)
+        await asyncio.sleep(65)
 
 async def main():
     import argparse
@@ -765,7 +792,7 @@ async def main():
   Acc: {args.acc} | Tự động Thu Hoạch Két Sắt Mỗi Giờ | Cày Card GPU Phù Hợp Giàn Máy Đào
 =============================================================================
     """ + Style.RESET_ALL)
-    bot = RedRigBot(string_session=session_str, session_path=session_file)
+    bot = RedRigBot(acc_id=args.acc, string_session=session_str, session_path=session_file)
     if args.loop > 0:
         await run_loop_247(bot, interval_mins=args.loop)
     else:

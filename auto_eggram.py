@@ -29,6 +29,14 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import RequestWebViewRequest
 
+from human_behavior import (
+    get_device_profile,
+    handle_sleep_schedule_sync,
+    check_sleep_window,
+    SessionBurstManager,
+    get_vn_time
+)
+
 init(autoreset=True)
 
 # ----------------- CẤU HÌNH CỐ ĐỊNH -----------------
@@ -84,12 +92,10 @@ class EggramBot:
         self.adsgram_block_id = "58569"
         self.http = requests.Session()
         
-        # User agent Android chuẩn
-        self.ua = (
-            "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 "
-            "Mobile Safari/537.36 Telegram-Android/11.5.3 (Samsung SM-S928B; Android 14; SDK 34; AVERAGE)"
-        )
+        dev = get_device_profile(self.acc_id)
+        self.device_name = dev["device_name"]
+        self.ua = dev["ua"]
+        self.platform = dev["platform"]
 
     def get_headers(self):
         h = {
@@ -255,7 +261,7 @@ class EggramBot:
             'blockId': self.adsgram_block_id,
             'tg_id': self.user_id,
             'tg_platform': 'android',
-            'platform': 'Linux armv8l',
+            'platform': getattr(self, 'platform', 'Linux armv8l'),
             'language': 'en',
             'top_domain': 'sslip.io',
             'signature': self.sig,
@@ -516,10 +522,16 @@ def run_bot(acc_id=1, max_runtime=17500):
 
     last_status_print = 0
 
-    while True:
-        elapsed = time.time() - start_time
+    log(f"MAIN_ACC{acc_id}", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 45-75p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
+    burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=45, break_max_mins=75)
 
-        # Kiểm tra chuyển giao ca 24/7 trên Cloud GitHub Actions
+    while True:
+        # 1. Kiểm tra Giờ ngủ tự nhiên (00:30 - 05:15 VN)
+        slept = handle_sleep_schedule_sync(log_func=lambda msg: log(f"MAIN_ACC{acc_id}", msg, Fore.MAGENTA))
+        if slept:
+            burst_mgr.start_new_burst()
+
+        elapsed = time.time() - start_time
         gh_repo = os.getenv("GITHUB_REPOSITORY")
         gh_pat = os.getenv("GH_PAT") or os.getenv("PAT_TOKEN")
         gh_wf = os.getenv("WORKFLOW_NAME", f"game4_eggram_acc{acc_id}.yml")
@@ -530,21 +542,37 @@ def run_bot(acc_id=1, max_runtime=17500):
                 dispatch_next_shift(gh_repo, gh_wf, gh_pat)
             break
 
-        now_sec = time.time()
+        # 2. Hết phiên chơi -> Nghỉ giải lao tự nhiên (Human Break)
+        if burst_mgr.is_burst_finished():
+            break_sec = burst_mgr.get_break_duration()
+            log(f"MAIN_ACC{acc_id}", f"☕ [PHIÊN #{burst_mgr.burst_count} XONG] Đóng app, nghỉ ngơi tự nhiên {break_sec//60} phút...", Fore.CYAN)
+            
+            slept_during_break = 0
+            while slept_during_break < break_sec:
+                in_sleep, _ = check_sleep_window()
+                if in_sleep:
+                    handle_sleep_schedule_sync(log_func=lambda msg: log(f"MAIN_ACC{acc_id}", msg, Fore.MAGENTA))
+                    break
+                step = min(60, break_sec - slept_during_break)
+                time.sleep(step)
+                slept_during_break += step
+            
+            log(f"MAIN_ACC{acc_id}", f"📱 [MỞ LẠI APP] Bắt đầu phiên chơi mới #{burst_mgr.burst_count + 1}...", Fore.GREEN)
+            burst_mgr.start_new_burst()
+            continue
 
-        # In dashboard mỗi 15 phút
+        now_sec = time.time()
         if now_sec - last_status_print > 900:
             bot.print_status_dashboard()
             last_status_print = now_sec
 
-        # Ấp Trứng Vàng Tier 3 Tối ưu Siêu Tốc
+        # 3. Trong phiên chơi: Ấp Trứng Vàng Tier 3
         try:
             ok, sleep_sec = bot.hatch_egg_chain()
         except Exception as e:
             log(f"MAIN_ACC{acc_id}_LOOP_ERR", f"Lỗi chu trình ấp trứng: {e}", Fore.RED)
             sleep_sec = 15
 
-        # Nghỉ ngơi chính xác theo cooldown
         sleep_sec = max(1.0, float(sleep_sec))
         time.sleep(sleep_sec)
 
