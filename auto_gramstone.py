@@ -391,9 +391,9 @@ class GramstoneBot:
                     pass
                 time.sleep(1.5)
 
-            # Báo cáo Step 1 cho Gramstone
+            # Báo cáo Step 1 cho Gramstone (Kiên trì chờ xác nhận tối đa 35s)
             counted_s1 = False
-            for step_try in range(8):
+            for step_try in range(16):
                 try:
                     r_s1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "adsgram"}, timeout=10).json()
                     if r_s1.get("ok") and r_s1.get("counted"):
@@ -406,7 +406,7 @@ class GramstoneBot:
                         time.sleep((ms / 1000.0) + 0.5)
                         continue
                     elif code == "ad_unverified":
-                        time.sleep(1.5)
+                        time.sleep(2.0)
                         continue
                 except Exception:
                     pass
