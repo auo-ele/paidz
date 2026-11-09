@@ -565,7 +565,15 @@ class RedRigBot:
 
         # 3. Khởi tạo phiên Unlock Rack nếu chưa có session
         if not ses_id:
-            target_rack = ru.get("expired_idx") if ru.get("expired_idx") is not None else (ru.get("target") or "new")
+            target_rack = None
+            if ru.get("expired_idx") is not None:
+                target_rack = ru.get("expired_idx")
+            elif not ru.get("can_new", True) or ru.get("max", 3) <= len(state.get("racks", [])):
+                expiring = [r for r in state.get("racks", []) if r.get("expires_at") is not None]
+                expiring.sort(key=lambda r: r.get("seconds_left") or 999999)
+                target_rack = expiring[0]["idx"] if expiring else 2
+            else:
+                target_rack = ru.get("target") or "new"
             log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa/tái kích hoạt Rack #{target_rack} (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
             r_start = self.http.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": target_rack}, timeout=10)
             if r_start.status_code == 200:
@@ -651,13 +659,24 @@ class RedRigBot:
         # 1. Thu hoạch két sắt TON
         state = self.check_and_claim_vault(state)
         
-        # 2. Ưu tiên mở khóa / tái kích hoạt Rack hết hạn để khôi phục công suất
+        # 2. Kiểm tra Rack và Card GPU:
         ru = state.get("rack_unlock", {})
-        if ru.get("expired_idx") is not None or (ru.get("ads_done", 0) > 0 and not ru.get("full")):
+        cards = state.get("cards", [])
+        has_fits = any(c.get("fits") for c in cards)
+        open_ses = state.get("open_session") or {}
+
+        # Nếu có Rack hết hạn hoặc đang có phiên Rack dở dang -> ưu tiên hoàn thành Rack
+        if ru.get("expired_idx") is not None or (open_ses.get("purpose") == "rack"):
             log("CYCLE", f"⚡ Ưu tiên mở khóa/tái kích hoạt Rack (Tiến độ: {ru.get('ads_done', 0)}/{ru.get('ads_needed', 9)} ads)...", Fore.CYAN)
             state = self.boost_rack_unlock_chain(state)
+        elif has_fits:
+            # Có chỗ trống trên Rack -> Cày Card GPU ngay để tăng công suất tối đa!
+            state = self.boost_moonpool_gpu_chain(state)
+        elif ru.get("ads_done", 0) > 0 or not ru.get("full", True):
+            # Tất cả Card đã kín nhưng Rack cần gia hạn -> Xem QC gia hạn Rack
+            log("CYCLE", f"⚡ Racks đã kín chỗ. Tiếp tục gia hạn Rack (Tiến độ: {ru.get('ads_done', 0)}/{ru.get('ads_needed', 9)} ads)...", Fore.CYAN)
+            state = self.boost_rack_unlock_chain(state)
         else:
-            # 3. Cày Card GPU theo chuẩn Native Moonpool (Tự động chọn Tier phù hợp với Rack)
             state = self.boost_moonpool_gpu_chain(state)
         
         # 4. Kiểm tra & Nhận Daily Streak
