@@ -216,7 +216,7 @@ class EggramBot:
         claimable = vault.get("claimable", False)
         pending = float(vault.get("pending", 0))
 
-        if claimable and pending > 0:
+        if (claimable or vault.get("full", False) or pending >= 0.00005) and pending > 0:
             log(f"ACC{self.acc_id}_BASKET", f"🧺 Giỏ trứng đang có {pending:.6f} GRAM. Đang gom...", Fore.CYAN)
             try:
                 r = self.http.post(f"{API_BASE}/api/claim", headers=self.get_headers(), json={}, timeout=15)
@@ -227,6 +227,10 @@ class EggramBot:
                         new_bal = float(data.get("state", {}).get("balance", 0))
                         log(f"ACC{self.acc_id}_CLAIMED", f"✓ Đã gom +{amt:.6f} GRAM! (Ví: {new_bal:.6f} GRAM)", Fore.GREEN)
                         return True
+                    else:
+                        code = data.get("code")
+                        if code not in ("too_early", "nothing_to_claim", "already_claimed"):
+                            log(f"ACC{self.acc_id}_CLAIM_INFO", f"Phản hồi gom trứng: {code}", Fore.YELLOW)
             except Exception as e:
                 log(f"ACC{self.acc_id}_CLAIM_ERR", f"Lỗi gom trứng: {e}", Fore.RED)
         return False
@@ -372,8 +376,10 @@ class EggramBot:
         daily = state.get("daily", {})
         daily_left = daily.get("left", 80)
         if daily_left <= 0:
-            log(f"ACC{self.acc_id}_DAILY_CAP", "Đã đạt giới hạn ấp gà hôm nay (80/80 con). Nghỉ ngơi...", Fore.YELLOW)
-            return False, 300
+            log(f"ACC{self.acc_id}_DAILY_CAP", "Đã đạt giới hạn ấp gà hôm nay (80/80 con). Tiếp tục tự động gom giỏ trứng...", Fore.YELLOW)
+            self.claim_basket(state)
+            self.check_tasks(state)
+            return False, 180
 
         open_ses = state.get("open_session")
         ses_id = None
@@ -539,6 +545,7 @@ def run_bot(acc_id=1, max_runtime=17500):
     bot.claim_basket(state)
 
     last_status_print = 0
+    last_basket_claim = time.time()
 
     log(f"MAIN_ACC{acc_id}", f"🔥 BẬT CHẾ ĐỘ NGƯỜI THẬT: Phiên chơi 20-30p | Nghỉ 5-8p | Giờ ngủ VN 00:30-05:15!", Fore.GREEN)
     burst_mgr = SessionBurstManager(burst_min_mins=20, burst_max_mins=30, break_min_mins=5, break_max_mins=8)
@@ -562,6 +569,7 @@ def run_bot(acc_id=1, max_runtime=17500):
 
         # 2. Hết phiên chơi -> Nghỉ giải lao tự nhiên (Human Break)
         if burst_mgr.is_burst_finished():
+            bot.claim_basket()
             break_sec = burst_mgr.get_break_duration()
             log(f"MAIN_ACC{acc_id}", f"☕ [PHIÊN #{burst_mgr.burst_count} XONG] Đóng app, nghỉ ngơi tự nhiên {break_sec//60} phút...", Fore.CYAN)
             
@@ -580,6 +588,11 @@ def run_bot(acc_id=1, max_runtime=17500):
             continue
 
         now_sec = time.time()
+        # Tự động gom giỏ trứng độc lập định kỳ mỗi 180s (3 phút)
+        if now_sec - last_basket_claim >= 180:
+            bot.claim_basket()
+            last_basket_claim = now_sec
+
         if now_sec - last_status_print > 900:
             bot.print_status_dashboard()
             last_status_print = now_sec
