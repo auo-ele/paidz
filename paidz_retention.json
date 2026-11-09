@@ -1,0 +1,12 @@
+{
+  "channels": {
+    "123456": {
+      "id": 123456,
+      "username": "test_group",
+      "title": "Test Group",
+      "url": "https://t.me/test_group",
+      "joined_at": 1794229632.7695646,
+      "status": "active"
+    }
+  }
+}
