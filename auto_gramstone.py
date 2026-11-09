@@ -268,153 +268,208 @@ class GramstoneBot:
                 log("VAULT_ERR", f"Lỗi thu hoạch: {e}", Fore.RED)
         return False
 
-    def boost_moonpool_card_chain(self, tier=3):
-        """Cơ chế cày Thẻ Safir Tier 3 (+4 GH/s) với Adsgram V2 Event Tracking + Gigapub + Monetag"""
-        log("CARD_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Thẻ Mỏ Tier {tier} (Safir +4 GH/s)...", Fore.CYAN)
-        
-        # 1. Bắt đầu ca Thẻ
-        try:
-            r_start = requests.post(f"{API_BASE}/api/cards/start", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
-        except Exception as e:
-            log("CARD_WARN", f"Lỗi mạng khi mở thẻ: {e}", Fore.YELLOW)
-            return False, 30
-
-        if r_start.status_code == 401:
-            log("CARD_WARN", "Token hết hạn khi mở thẻ. Yêu cầu re-auth...", Fore.YELLOW)
-            self.init_data = None
-            return False, 5
-            
-        if r_start.status_code != 200:
-            log("CARD_WARN", f"Chưa thể nhận thẻ mới (HTTP {r_start.status_code})", Fore.YELLOW)
-            return False, 60
-            
-        d_start = r_start.json()
-        if not d_start.get("ok"):
-            err = d_start.get("error", "")
-            cd_left = d_start.get("cooldown_left_sec", 60)
-            log("CARD_WARN", f"Chưa sẵn sàng: {err} (Hồi chiêu còn {cd_left}s)", Fore.YELLOW)
-            return False, cd_left
-
-        card_info = d_start.get("card", {})
-        log("CARD_MOONPOOL", f"✅ Khởi tạo thành công ca Thẻ Tier {tier} ({card_info.get('name', 'Safir')})! Chuỗi 3 QC: Adsgram -> Gigapub -> Monetag", Fore.GREEN)
-
-        # 2. Bước 1: Adsgram
-        log("STEP1_ADSGRAM", "Bước 1/3: Đang tải quảng cáo Adsgram (Block 54796)...", Fore.YELLOW)
+    def trigger_adsgram_events(self, block_id="54796"):
+        """Gửi Render, Show, Reward tới Adsgram chuẩn định dạng quốc tế (language=en)"""
         ad_headers = {
             "User-Agent": self.ua,
             "Origin": API_BASE,
             "Referer": f"{API_BASE}/",
-            "Accept": "application/json",
+            "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "org.telegram.messenger"
         }
         adv_params = {
-            "blockId": "54796",
+            "blockId": str(block_id),
             "tg_id": self.user_id,
             "tg_platform": "android",
             "platform": self.platform,
-            "language": "vi",
+            "language": "en",
             "top_domain": "sslip.io",
             "signature": self.sig,
             "data_check_string": self.dcs,
             "sdk_version": "2.2.5"
         }
-        render_url = None
-        show_url = None
-        reward_url = None
         try:
-            r_adv = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=15)
-            if r_adv.status_code == 200:
+            r = requests.get("https://api.adsgram.ai/adv", headers=ad_headers, params=adv_params, timeout=15)
+            urls = []
+            if r.status_code == 200:
                 try:
-                    d_adv = r_adv.json()
-                    trackings = d_adv.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
+                    d = r.json()
+                    trackings = d.get("banners", [{}])[0].get("banner", {}).get("trackings", [])
                     for t in trackings:
-                        tn = t.get("name")
-                        tv = t.get("value")
-                        if tn == "render": render_url = tv
-                        elif tn == "show": show_url = tv
-                        elif tn == "reward": reward_url = tv
+                        v = t.get("value")
+                        if v: urls.append(v)
                 except Exception:
                     pass
-                if not render_url or not reward_url:
-                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'\"]+', r_adv.text):
-                        if "Render" in u or "trackingtypeid=1" in u: render_url = u
-                        elif "Show" in u or "trackingtypeid=0" in u or "trackingtypeid=2" in u: show_url = u
-                        elif "Reward" in u or "trackingtypeid=14" in u: reward_url = u
-            if render_url:
-                try: requests.get(render_url, headers=ad_headers, timeout=8)
-                except Exception: pass
-            if show_url:
-                try: requests.get(show_url, headers=ad_headers, timeout=8)
-                except Exception: pass
-            
-            # Anti-timing tự nhiên 18s - 22s
-            watch_sec = round(random.uniform(18.2, 22.5), 2)
-            log("STEP1_ADSGRAM", f"Đang xem video Adsgram ({watch_sec}s trên {self.device_name})...", Fore.YELLOW)
-            time.sleep(watch_sec)
-            
-            if reward_url:
-                try: requests.get(reward_url, headers=ad_headers, timeout=10)
-                except Exception: pass
-            time.sleep(2.5)
-        except Exception as e:
-            log("STEP1_WARN", f"Lỗi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
-            time.sleep(18)
+                if not urls:
+                    urls = re.findall(r"https://api\.adsgram\.ai/event\?[^\s\'\"]+", r.text)
 
-        # Chờ xác thực máy chủ
-        for _ in range(12):
+            for u in urls:
+                try: requests.get(u, headers=ad_headers, timeout=8)
+                except Exception: pass
+
+            log("ADSGRAM", f"Đang xem video Adsgram ({len(urls)} tracking events)...", Fore.YELLOW)
+            time.sleep(8.5)
+            return True
+        except Exception as e:
+            log("ADSGRAM_WARN", f"Lỗi gọi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
+            time.sleep(8.5)
+            return False
+
+    def wait_for_adsgram_confirmation(self, max_tries=8):
+        """Chờ máy chủ Gramstone xác nhận voucher Adsgram qua POST /api/ads/adsgram-status"""
+        for i in range(max_tries):
             try:
-                r_st = requests.get(f"{API_BASE}/api/ads/adsgram-status", headers=self.get_headers(), params={"telegram_id": self.user_id}, timeout=10)
-                if r_st.status_code == 200 and r_st.json().get("ready"):
-                    log("STEP1_ADSGRAM", "✓ Máy chủ Gramstone đã xác thực Adsgram hoàn tất!", Fore.GREEN)
-                    break
+                r = requests.post(f"{API_BASE}/api/ads/adsgram-status", headers=self.get_headers(), json={"telegram_id": self.user_id}, timeout=10)
+                if r.status_code == 200 and r.json().get("ready"):
+                    log("ADSGRAM", f"✓ Máy chủ Gramstone đã xác thực Adsgram hoàn tất (lần thử #{i+1})!", Fore.GREEN)
+                    return True
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1.5)
+        return False
 
-        # Báo cáo Bước 1
-        r_step1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier, "network": "adsgram"}, timeout=10)
-        if r_step1.status_code != 200 and r_step1.status_code != 409:
-            log("STEP1_WARN", f"Chưa xác nhận được Bước 1 (HTTP {r_step1.status_code})", Fore.YELLOW)
-            return False, 10
-        log("STEP1_ADSGRAM", "✓ Bước 1/3 Adsgram hoàn tất!", Fore.GREEN)
+    def report_card_step(self, session_id, network, max_tries=14):
+        """Báo cáo bước thẻ lên /api/cards/step chuẩn frontend pcStep của Gramstone"""
+        started = time.time()
+        for attempt in range(max_tries):
+            try:
+                r = requests.post(
+                    f"{API_BASE}/api/cards/step",
+                    headers=self.get_headers(),
+                    json={"telegram_id": self.user_id, "session_id": session_id, "network": network},
+                    timeout=10
+                )
+                d = r.json() if r.status_code in [200, 400, 409, 429, 500] else {}
+                if d.get("ok") and d.get("counted"):
+                    return True, d.get("session")
+                code = d.get("code", "")
+                if code in ["chain_complete", "session_closed"]:
+                    return True, d.get("session")
+                if code == "out_of_order":
+                    log("CARD_WARN", f"[{network}] Server báo out_of_order (bước trước chưa hoàn thành)!", Fore.RED)
+                    return False, None
+                if code == "too_early":
+                    retry_ms = d.get("retry_in_ms", 2000)
+                    wait_s = min(8.0, float(retry_ms) / 1000.0) + 0.35
+                    time.sleep(wait_s)
+                    continue
+                if code == "ad_unverified":
+                    if time.time() - started > 30.0:
+                        log("CARD_WARN", f"[{network}] Adsgram verify timeout (30s)", Fore.YELLOW)
+                        return False, None
+                    time.sleep(1.8)
+                    continue
+                time.sleep(1.5)
+            except Exception:
+                time.sleep(1.5)
+        return False, None
 
-        # 3. Bước 2: Gigapub (Delay 8.5s - 12s)
-        watch_giga = round(random.uniform(9.0, 12.5), 2)
-        log("STEP2_GIGAPUB", f"Bước 2/3: Đang xem QC Gigapub ({watch_giga}s)...", Fore.YELLOW)
-        time.sleep(watch_giga)
-        r_step2 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier, "network": "gigapub"}, timeout=10)
-        if r_step2.status_code != 200 and r_step2.status_code != 409:
-            log("STEP2_WARN", f"Chưa xác nhận được Bước 2 (HTTP {r_step2.status_code})", Fore.YELLOW)
-            return False, 10
-        log("STEP2_GIGAPUB", "✓ Bước 2/3 Gigapub hoàn tất!", Fore.GREEN)
+    def finish_card(self, session_id, max_tries=4):
+        """Hoàn tất chuỗi thẻ và nhận phần thưởng qua POST /api/cards/finish"""
+        for attempt in range(max_tries):
+            try:
+                r = requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": session_id}, timeout=10)
+                if r.status_code == 200:
+                    d = r.json()
+                    if d.get("ok"):
+                        return d
+            except Exception:
+                pass
+            time.sleep(1.5)
+        return None
 
-        # 4. Bước 3: Monetag (Delay 8.5s - 12s)
-        watch_mone = round(random.uniform(9.0, 12.5), 2)
-        log("STEP3_MONETAG", f"Bước 3/3: Đang xem QC Monetag ({watch_mone}s)...", Fore.YELLOW)
-        time.sleep(watch_mone)
-        r_step3 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier, "network": "monetag"}, timeout=10)
-        if r_step3.status_code != 200 and r_step3.status_code != 409:
-            log("STEP3_WARN", f"Chưa xác nhận được Bước 3 (HTTP {r_step3.status_code})", Fore.YELLOW)
-            return False, 10
-        log("STEP3_MONETAG", "✓ Bước 3/3 Monetag hoàn tất!", Fore.GREEN)
+    def boost_moonpool_card_chain(self, tier=3, auth_data=None):
+        """Cơ chế cày Thẻ Safir Tier 3 (+4 GH/s) với Adsgram -> Gigapub -> Monetag chuẩn tuần tự 100%"""
+        cards = auth_data.get("cards", {}) if auth_data else {}
+        cd_left = cards.get("cooldown_left_sec", 0)
+        if cd_left > 0:
+            log("CARD_COOLDOWN", f"⏳ Thẻ Mỏ đang hồi chiêu ({cd_left}s)...", Fore.LIGHTBLACK_EX)
+            return False, cd_left
 
-        # 5. Hoàn tất nhận thẻ Safir Tier 3
-        try:
-            r_claim = requests.post(f"{API_BASE}/api/cards/claim", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
-            if r_claim.status_code == 200:
-                d_c = r_claim.json()
-                if d_c.get("ok"):
-                    u = d_c.get("user", {})
-                    tot = u.get("total_hashrate", self.total_ghs)
-                    bns = u.get("bonus_hashrate", self.bonus_ghs)
-                    log("CARD_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG THẺ MỎ TIER {tier} (+4 GH/s)! Tổng công suất: {tot} GH/s (Thẻ kích hoạt: +{bns} GH/s)", Fore.GREEN)
-                    return True, 10
-                else:
-                    log("CARD_WARN", f"Phản hồi từ server: {d_c.get('error', '')}", Fore.YELLOW)
-        except Exception as e:
-            log("CARD_ERR", f"Lỗi hoàn tất thẻ: {e}", Fore.RED)
+        daily = cards.get("daily", {})
+        if daily.get("cap", 0) > 0 and daily.get("used", 0) >= daily.get("cap", 0):
+            log("CARD_CAP", "🛑 Đã đạt giới hạn thẻ hôm nay!", Fore.YELLOW)
+            return False, 300
 
-        return False, 30
+        ses_id = None
+        start_step = 0
+        open_ses = cards.get("open")
+        if open_ses and open_ses.get("id") and open_ses.get("status") == "open":
+            exp = open_ses.get("expires_at", 0)
+            srv_time = int(time.time() * 1000)
+            if exp > srv_time:
+                ses_id = open_ses.get("id")
+                start_step = open_ses.get("steps_done", 0)
+                tier = open_ses.get("tier", tier)
+                log("CARD_MOONPOOL", f"Phát hiện ca Thẻ #{ses_id} (Tier {tier}) dở dang (Bước {start_step}/{tier}). Tiếp tục...", Fore.CYAN)
+            else:
+                log("CARD_MOONPOOL", f"Phiên thẻ cũ #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
+                self.finish_card(open_ses.get("id"))
+                time.sleep(1.5)
+
+        if not ses_id:
+            log("CARD_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Thẻ Mỏ Tier {tier} (+4 GH/s)...", Fore.CYAN)
+            try:
+                r_start = requests.post(f"{API_BASE}/api/cards/start", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
+                if r_start.status_code == 401:
+                    log("CARD_WARN", "Token hết hạn khi mở thẻ. Re-auth...", Fore.YELLOW)
+                    self.init_data = None
+                    return False, 5
+                if r_start.status_code != 200:
+                    log("CARD_WARN", f"Chưa thể nhận thẻ mới (HTTP {r_start.status_code})", Fore.YELLOW)
+                    return False, 60
+                d_start = r_start.json()
+                if not d_start.get("ok"):
+                    err = d_start.get("error", "")
+                    cd = d_start.get("cooldown_left_sec") or d_start.get("retry_in_sec", 60)
+                    log("CARD_WARN", f"Chưa sẵn sàng: {err} (Hồi chiêu {cd}s)", Fore.YELLOW)
+                    return False, cd
+                ses = d_start.get("session", {})
+                ses_id = ses.get("id")
+                start_step = ses.get("steps_done", 0)
+                log("CARD_MOONPOOL", f"✅ Khởi tạo thành công ca Thẻ #{ses_id} (Tier {tier})! Chuỗi {tier} bước: Adsgram -> Gigapub -> Monetag", Fore.GREEN)
+            except Exception as e:
+                log("CARD_ERR", f"Lỗi mở thẻ: {e}", Fore.RED)
+                return False, 30
+
+        chain = ["adsgram", "gigapub", "monetag"][:tier]
+        total = len(chain)
+
+        # Chạy tuần tự tuyệt đối
+        for idx in range(start_step, total):
+            net = chain[idx]
+            step_num = idx + 1
+            log(f"STEP{step_num}_{net.upper()}", f"Bước {step_num}/{total}: Đang xem QC {net.upper()}...", Fore.YELLOW)
+
+            if net == "adsgram":
+                self.trigger_adsgram_events("54796")
+                self.wait_for_adsgram_confirmation()
+            else:
+                time.sleep(8.5)
+
+            counted, updated_ses = self.report_card_step(ses_id, net, max_tries=14)
+            if counted:
+                log(f"STEP{step_num}_{net.upper()}", f"✓ Bước {step_num}/{total} ({net}) hoàn tất thành công!", Fore.GREEN)
+            else:
+                log(f"STEP{step_num}_WARN", f"Chưa xác nhận được Bước {step_num} ({net}). Đóng phiên an toàn để nhận thẻ từng phần...", Fore.YELLOW)
+                self.finish_card(ses_id)
+                return False, 60
+
+        # Hoàn tất nhận thẻ
+        d_fin = self.finish_card(ses_id)
+        if d_fin and d_fin.get("ok"):
+            card = d_fin.get("card", {})
+            u = d_fin.get("user", {})
+            m = d_fin.get("mining", {})
+            tot = m.get("totalGhs", self.total_ghs)
+            bns = u.get("bonus_ghs", self.bonus_ghs)
+            self.total_ghs = float(tot)
+            self.bonus_ghs = float(bns)
+            log("CARD_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG THẺ MỎ TIER {card.get('tier', tier)} (+{card.get('ghs', 4)} GH/s)! Tổng công suất: {self.total_ghs} GH/s (Thẻ kích hoạt: +{self.bonus_ghs} GH/s)", Fore.GREEN)
+            return True, 60
+        else:
+            log("CARD_WARN", f"Kết thúc phiên thẻ #{ses_id}.", Fore.YELLOW)
+            return False, 60
 
     async def run_cycle(self):
         auth_data = await self.get_valid_auth()
@@ -424,7 +479,7 @@ class GramstoneBot:
         self.claim_streak()
         self.tap_mine()
         self.check_and_claim_vault(auth_data)
-        self.boost_moonpool_card_chain(tier=3)
+        self.boost_moonpool_card_chain(tier=3, auth_data=auth_data)
 
 
 def trigger_next_shift(workflow_file="game1_gramstone.yml"):
@@ -524,7 +579,7 @@ async def run_loop_247(bot_instance, interval_mins=0):
 
         # 3.3. Cày Thẻ Safir Tier 3
         try:
-            ok, retry_in = bot_instance.boost_moonpool_card_chain(tier=3)
+            ok, retry_in = bot_instance.boost_moonpool_card_chain(tier=3, auth_data=auth_data)
             if ok:
                 card_count += 1
                 log("CONTINUOUS", f"🎉 [THẺ MỎ #{card_count}] Đã nhận +4 GH/s! Nghỉ 15s trước lượt kế...", Fore.CYAN)

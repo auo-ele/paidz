@@ -346,8 +346,11 @@ class EggramBot:
                 elif r.status_code == 409:
                     d = r.json() if r.text.startswith('{') else {}
                     code = d.get("code")
-                    if code in ("chain_complete", "out_of_order"):
+                    if code in ("chain_complete", "session_closed", "fish_already_granted"):
                         return True, d.get("session")
+                    elif code == "out_of_order":
+                        log(f"ACC{self.acc_id}_STEP_WARN", f"Server báo out_of_order ({network})!", Fore.RED)
+                        return False, None
                     elif code == "too_early":
                         ms = int(d.get("retry_in_ms", 1200))
                         time.sleep(max(0.5, (ms / 1000.0) + 0.15))
@@ -446,8 +449,10 @@ class EggramBot:
             if counted:
                 log(f"ACC{self.acc_id}_STEP_OK", f"✓ Bước {step_num}/{total} ({net}) hoàn tất!", Fore.GREEN)
             else:
-                log(f"ACC{self.acc_id}_STEP_FAIL", f"Chưa xác nhận được bước {step_num} ({net}). Tiến hành ấp ngay gà mới...", Fore.YELLOW)
-                break
+                log(f"ACC{self.acc_id}_STEP_FAIL", f"Chưa xác nhận được bước {step_num} ({net}). Dừng chuỗi để bảo vệ tài khoản...", Fore.YELLOW)
+                try: self.http.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+                except Exception: pass
+                return False, 10
 
         # Hoàn tất ấp trứng
         log(f"ACC{self.acc_id}_FINISH", f"🐣 Hoàn tất ấp trứng phiên #{ses_id}...", Fore.CYAN)
