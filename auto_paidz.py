@@ -17,6 +17,7 @@
 
 import os
 import sys
+import subprocess
 import time
 import json
 import struct
@@ -84,9 +85,52 @@ REPO_NAME = (os.getenv("GITHUB_REPOSITORY") or "auo-ele/paidz").strip()
 WORKFLOW_FILE = (os.getenv("WORKFLOW_FILE") or "paidz_acc4.yml").strip()
 MAX_RUNTIME_SECONDS = _safe_int(os.getenv("MAX_RUNTIME_SECONDS"), 17500)
 
+# THỜI GIAN GIỮ NHÓM THEO QUY ĐỊNH PAIDZ: TỐI THIỂU 8 TIẾNG (28800s) MỚI TÍNH TIỀN
+RETENTION_HOURS = 8.0
+RETENTION_SECONDS = int(RETENTION_HOURS * 3600)  # 28800 giây (8 giờ chuẩn)
+RETENTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paidz_retention.json")
+
 # DANH SÁCH KÊNH CHÍNH THỨC BẮT BUỘC GIỮ LẠI (TUYỆT ĐỐI KHÔNG RỜI KÊNH)
 PROTECTED_CHANNEL_IDS = {2307369718}
 PROTECTED_USERNAMES = {"paidz_news", "paidz", "paidzapp", "paidz_chat", "paidz_community"}
+
+def load_retention_data():
+    if os.path.exists(RETENTION_FILE):
+        try:
+            with open(RETENTION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "channels" in data:
+                    return data
+        except Exception as e:
+            log("RETENTION", f"Lỗi đọc {RETENTION_FILE}: {e}", Fore.YELLOW)
+    return {"channels": {}}
+
+def save_retention_data(data):
+    try:
+        with open(RETENTION_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log("RETENTION", f"Lỗi ghi {RETENTION_FILE}: {e}", Fore.RED)
+
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def git_sync_retention():
+    try:
+        pat = os.getenv("GH_PAT", "").strip()
+        repo = (os.getenv("GITHUB_REPOSITORY") or "auo-ele/paidz").strip()
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["git", "add", "paidz_retention.json"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        diff = subprocess.run(["git", "diff", "--staged", "--quiet"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if diff.returncode != 0:
+            subprocess.run(["git", "commit", "-m", "chore: persist paidz retention tracking [skip ci]"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if pat and repo:
+                remote_url = f"https://x-access-token:{pat}@github.com/{repo}.git"
+                subprocess.run(["git", "push", remote_url, "HEAD:main"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            else:
+                subprocess.run(["git", "push"], cwd=REPO_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        pass
 
 # Các mạng QC server-to-server (bắt buộc server postback)
 S2S_NETWORKS = {"adsgram", "usl", "adloop", "onclicka", "adsbitvex"}
@@ -230,6 +274,12 @@ def is_protected_entity(entity):
     """Kiểm tra xem kênh/nhóm có thuộc danh sách cấm rời (như @PAIDZ_NEWS) hay không."""
     if not entity:
         return False
+    if isinstance(entity, int):
+        return entity in PROTECTED_CHANNEL_IDS
+    if isinstance(entity, str):
+        clean_name = entity.replace("@", "").lower().strip()
+        return clean_name in PROTECTED_USERNAMES or "paidz" in clean_name
+
     ent_id = getattr(entity, "id", None)
     ent_username = (getattr(entity, "username", None) or "").lower().strip()
     ent_title = (getattr(entity, "title", None) or "").lower().strip()
@@ -238,7 +288,7 @@ def is_protected_entity(entity):
         return True
     if ent_username in PROTECTED_USERNAMES:
         return True
-    if "paidz official" in ent_title or "paidz_news" in ent_title:
+    if "paidz official" in ent_title or "paidz_news" in ent_title or "paidz" in ent_username:
         return True
     return False
 
@@ -266,6 +316,7 @@ class PaidZClient:
         self.gate_deadlocked_until = 0
         self.last_ad_claim_time = 0.0
         self.global_ad_cooldown_until = 0.0
+        self.retention_data = load_retention_data()
 
         self.tg_client = TelegramClient(
             StringSession(TELEGRAM_STRING_SESSION),
@@ -406,6 +457,18 @@ class PaidZClient:
             if not await self.ensure_tg_connected():
                 return
 
+            if isinstance(entity, (int, str)):
+                try:
+                    entity = await self.tg_client.get_entity(entity)
+                except Exception as e:
+                    log("TG_LEAVE_ERR", f"Không tìm thấy entity {entity} để rời: {e}", Fore.YELLOW)
+                    return
+
+            if is_protected_entity(entity):
+                title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
+                log("TG_KEEP", f"🛡️ Giữ nguyên kênh chính thức '{title}' - Không rời kênh!", Fore.CYAN)
+                return
+
             title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
 
             if getattr(entity, "bot", False):
@@ -467,6 +530,116 @@ class PaidZClient:
 
         except Exception as e:
             log("TG_LEAVE_ERR", f"❌ Lỗi khi rời kênh: {e}", Fore.RED)
+
+    def record_joined_channel(self, entity, url: str = "", title: str = ""):
+        """Ghi nhận nhóm/kênh đã tham gia vào hàng đợi giữ tối thiểu 8 tiếng."""
+        if not entity:
+            return
+        if is_protected_entity(entity):
+            log("RETENTION", f"🛡️ Kênh @PAIDZ_NEWS / {title} được bảo vệ vĩnh viễn (không bao giờ rời).", Fore.CYAN)
+            return
+
+        ent_id = getattr(entity, "id", None)
+        if ent_id is None and isinstance(entity, int):
+            ent_id = entity
+        if not ent_id:
+            return
+
+        key = str(ent_id)
+        now_ts = time.time()
+        channels = self.retention_data.setdefault("channels", {})
+
+        if key in channels:
+            item = channels[key]
+            elapsed_h = (now_ts - item.get("joined_at", now_ts)) / 3600
+            log("RETENTION", f"ℹ️ Nhóm '{item.get('title', title)}' (ID: {ent_id}) đã có trong hàng đợi giữ (đã ở {elapsed_h:.2f}h / 8.0h).", Fore.CYAN)
+            return
+
+        username = getattr(entity, "username", "") or ""
+        ent_title = title or getattr(entity, "title", "") or username or str(ent_id)
+
+        channels[key] = {
+            "id": ent_id,
+            "username": username,
+            "title": ent_title,
+            "url": url,
+            "joined_at": now_ts,
+            "status": "active"
+        }
+        save_retention_data(self.retention_data)
+        git_sync_retention()
+        log("RETENTION", f"📌 Ghi nhận nhóm '{ent_title}' (ID: {ent_id}) vào hàng đợi giữ 8 tiếng. Tuyệt đối KHÔNG rời trước 8h!", Fore.GREEN)
+
+    async def cleanup_expired_retention_channels(self):
+        """Kiểm tra và chỉ rời các nhóm đã tham gia đủ >= 8 tiếng theo quy định của PaidZ."""
+        channels = self.retention_data.get("channels", {})
+        if not channels:
+            return
+
+        now_ts = time.time()
+        active_items = []
+        expired_items = []
+
+        for key, item in list(channels.items()):
+            if item.get("status") != "active":
+                continue
+
+            ent_id = item.get("id")
+            title = item.get("title", str(ent_id))
+            username = item.get("username", "")
+            joined_at = item.get("joined_at", now_ts)
+            elapsed = now_ts - joined_at
+
+            if is_protected_entity(ent_id) or is_protected_entity(username):
+                item["status"] = "protected"
+                continue
+
+            if elapsed >= RETENTION_SECONDS:
+                expired_items.append((key, item, elapsed))
+            else:
+                remaining_h = (RETENTION_SECONDS - elapsed) / 3600
+                active_items.append((title, ent_id, elapsed / 3600, remaining_h))
+
+        if active_items:
+            log("RETENTION", f"📊 Đang giữ {len(active_items)} nhóm/kênh theo quy định 8 tiếng của PaidZ:", Fore.BLUE)
+            for t, cid, elap_h, rem_h in active_items[:5]:
+                log("RETENTION", f"   ⏳ '{t}' (ID: {cid}): Đã ở {elap_h:.1f}h / 8.0h (còn {rem_h:.1f}h nữa mới rời)", Fore.BLUE)
+            if len(active_items) > 5:
+                log("RETENTION", f"   ... và {len(active_items) - 5} nhóm khác đang tiếp tục giữ đủ 8 tiếng.", Fore.BLUE)
+
+        if not expired_items:
+            return
+
+        left_count = 0
+        log("RETENTION", f"🧹 Bắt đầu dọn dẹp {len(expired_items)} nhóm đã giữ ĐỦ >= 8 tiếng...", Fore.CYAN)
+        for key, item, elapsed in expired_items:
+            ent_id = item.get("id")
+            title = item.get("title", str(ent_id))
+            username = item.get("username", "")
+
+            target_to_leave = None
+            try:
+                if username:
+                    target_to_leave = await self.tg_client.get_entity(username)
+                else:
+                    target_to_leave = await self.tg_client.get_entity(ent_id)
+            except Exception as e:
+                log("RETENTION_WARN", f"Không tìm thấy entity qua username/id ({title}): {e}. Thử fallback bằng ID...", Fore.YELLOW)
+                target_to_leave = ent_id
+
+            try:
+                await self.tg_leave_target(target_to_leave)
+                item["status"] = "left"
+                item["left_at"] = time.time()
+                left_count += 1
+                log("RETENTION", f"✅ Đã rời nhóm '{title}' (đã ở {elapsed/3600:.2f}h >= 8h). Tiền thưởng PaidZ đã chốt an toàn 100%!", Fore.GREEN)
+                await asyncio.sleep(2)
+            except Exception as e:
+                log("RETENTION_ERR", f"Lỗi rời nhóm '{title}': {e}", Fore.RED)
+
+        if left_count > 0:
+            save_retention_data(self.retention_data)
+            git_sync_retention()
 
     def authenticate(self, init_data=None, silent=False):
         if init_data:
@@ -662,6 +835,8 @@ class PaidZClient:
             log(tag_name, f"🔗 Mục tiêu nhiệm vụ: {url_str[:65]}", Fore.CYAN)
             if "t.me/" in url_str or "telegram.me/" in url_str:
                 joined_entity = await self.tg_join_target(url_str)
+                if joined_entity:
+                    self.record_joined_channel(joined_entity, url_str, title)
             else:
                 try:
                     self.http.get(url_str, headers={'User-Agent': self.user_agent}, timeout=10, allow_redirects=True)
@@ -699,11 +874,8 @@ class PaidZClient:
                 log(f"{tag_name}_WARN", f"Claim lần {attempt+1} lỗi (HTTP {r_c.status_code}): {err_info}", Fore.YELLOW)
                 await asyncio.sleep(4)
 
-        if joined_entity and not is_protected_entity(joined_entity):
-            await asyncio.sleep(4)
-            await self.tg_leave_target(joined_entity)
-        elif joined_entity:
-            await self.tg_leave_target(joined_entity)
+        if joined_entity:
+            log(tag_name, f"🛡️ Giữ nhóm '{title}' trong tài khoản tối thiểu 8 tiếng để đảm bảo PaidZ tính tiền đầy đủ!", Fore.CYAN)
 
         return claimed
 
@@ -812,6 +984,8 @@ class PaidZClient:
                             joined_entity = None
                             if url_str and ("t.me/" in url_str or "telegram.me/" in url_str):
                                 joined_entity = await self.tg_join_target(url_str)
+                                if joined_entity:
+                                    self.record_joined_channel(joined_entity, url_str, title)
                                 await asyncio.sleep(5)
 
                             r_c = self.http.post(f"{API_BASE}/tasks/{tid}/claim", data=enc_string(1, tid), headers=headers, timeout=10)
@@ -821,11 +995,8 @@ class PaidZClient:
                                     self.balance = new_bal
                                     log("TASK", f"✅ Hoàn thành nhiệm vụ: '{title}' (+{rw:.4f} USDT) | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
 
-                            if joined_entity and not is_protected_entity(joined_entity):
-                                await asyncio.sleep(4)
-                                await self.tg_leave_target(joined_entity)
-                            elif joined_entity:
-                                await self.tg_leave_target(joined_entity)
+                            if joined_entity:
+                                log("TASK", f"🛡️ Giữ nhóm '{title}' trong tài khoản tối thiểu 8 tiếng để đảm bảo PaidZ tính tiền đầy đủ!", Fore.CYAN)
         except Exception as e:
             log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
 
@@ -1013,6 +1184,9 @@ async def main_loop():
         # Đảm bảo tài khoản luôn ở trong kênh chính thức @PAIDZ_NEWS ngay khi khởi động
         await bot.tg_join_target("https://t.me/PAIDZ_NEWS")
 
+        # Kiểm tra và chỉ dọn dẹp các nhóm đã giữ đủ >= 8 tiếng theo quy định PaidZ
+        await bot.cleanup_expired_retention_channels()
+
         await bot.check_and_unlock_task_gate()
         bot.spin_lucky_wheel()
         await bot.claim_available_tasks()
@@ -1039,6 +1213,8 @@ async def main_loop():
                     break
 
                 if (time.time() - start_time) >= MAX_RUNTIME_SECONDS:
+                    await bot.cleanup_expired_retention_channels()
+                    git_sync_retention()
                     log("HANDOVER", "Hoàn thành ca trực 4.8 tiếng (vẫn còn lượt). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
                     trigger_next_shift()
                     break
@@ -1054,6 +1230,8 @@ async def main_loop():
                 if (time.time() - last_task_check_time) >= 3600:
                     await bot.claim_available_tasks()
                     await bot.claim_community_campaigns()
+                    await bot.cleanup_expired_retention_channels()
+                    git_sync_retention()
                     last_task_check_time = time.time()
 
                 now = time.time()
@@ -1105,6 +1283,7 @@ async def main_loop():
                 log("LOOP_ERR", f"Lỗi vòng lặp: {e}", Fore.RED)
                 await asyncio.sleep(10)
     finally:
+        git_sync_retention()
         await bot.close_tg()
 
 if __name__ == '__main__':
