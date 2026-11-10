@@ -24,7 +24,8 @@
       "title": "Tavora",
       "url": "https://t.me/TavoraNodeOfficialBot?start=mibo_8PVMX2",
       "joined_at": 1794248189.7375593,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794278009.9221008
     },
     "1879202861": {
       "id": 1879202861,
@@ -32,7 +33,8 @@
       "title": "Adclicker",
       "url": "https://t.me/Adclickersbot?start=8707116423",
       "joined_at": 1794249123.2221386,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794278012.4837127
     },
     "2761677860": {
       "id": 2761677860,
