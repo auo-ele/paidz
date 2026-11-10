@@ -60,7 +60,8 @@
       "title": "Xentoryn Network | Official",
       "url": "https://t.me/XentorynAppBot?startapp=SDNJ396",
       "joined_at": 1794271681.48009,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794302799.3405418
     },
     "9266342412": {
       "id": 9266342412,
@@ -68,7 +69,8 @@
       "title": "GPU Factory",
       "url": "https://t.me/GPUFactoryAI?start=8954036308",
       "joined_at": 1794273518.41308,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794302801.8505213
     },
     "6890833969": {
       "id": 6890833969,
