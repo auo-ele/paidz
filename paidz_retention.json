@@ -114,7 +114,8 @@
       "title": "Start new miner",
       "url": "https://t.me/FishermanFarm_bot/app?startapp=997372240",
       "joined_at": 1794313619.8642178,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794344568.1610863
     },
     "8815229114": {
       "id": 8815229114,
