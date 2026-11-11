@@ -193,6 +193,14 @@
       "url": "https://t.me/gemini_mining_bot?start=7160778588",
       "joined_at": 1794360032.2008278,
       "status": "active"
+    },
+    "8180601488": {
+      "id": 8180601488,
+      "username": "diaton_bot",
+      "title": "DiaTON",
+      "url": "https://t.me/diaton_bot/app?startapp=r7880684687",
+      "joined_at": 1794375085.5585194,
+      "status": "active"
     }
   }
 }
