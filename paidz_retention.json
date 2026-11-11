@@ -182,6 +182,14 @@
       "url": "https://t.me/GoMineAppBot/app?startapp=ref_1531240410",
       "joined_at": 1794358195.5899138,
       "status": "active"
+    },
+    "8210564266": {
+      "id": 8210564266,
+      "username": "gemini_mining_bot",
+      "title": "Gemini Miner",
+      "url": "https://t.me/gemini_mining_bot?start=7160778588",
+      "joined_at": 1794360032.2008278,
+      "status": "active"
     }
   }
 }
