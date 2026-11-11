@@ -258,7 +258,8 @@
       "title": "Play LMTR",
       "url": "https://t.me/LUMETRAS_BOT/App?startapp=ref_7160778588",
       "joined_at": 1794397903.9292176,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794429522.2572296
     },
     "8893271886": {
       "id": 8893271886,
@@ -266,7 +267,8 @@
       "title": "PLAY VYQ",
       "url": "https://t.me/VYQMiners_bot/app?startapp=ref_7160778588",
       "joined_at": 1794398837.9803925,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794429524.7988544
     },
     "8918820447": {
       "id": 8918820447,
