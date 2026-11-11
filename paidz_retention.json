@@ -276,7 +276,8 @@
       "title": "Utya mining no verification fee join now",
       "url": "https://t.me/UTYA_miner_bot?start=ref_6466258522",
       "joined_at": 1794407461.8488715,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794438959.9624293
     },
     "9019981645": {
       "id": 9019981645,
@@ -284,7 +285,8 @@
       "title": "CherryPlay",
       "url": "https://t.me/CherryPlayBot/play?startapp=ri83oalmmc",
       "joined_at": 1794409214.109282,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794438962.3642783
     },
     "8846634641": {
       "id": 8846634641,
