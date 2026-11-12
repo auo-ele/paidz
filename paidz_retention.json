@@ -330,7 +330,8 @@
       "title": "Playing WEB3",
       "url": "https://t.me/playing_web3",
       "joined_at": 1794428965.327668,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794460176.0881202
     },
     "8755051970": {
       "id": 8755051970,
@@ -338,7 +339,8 @@
       "title": "Dragonia",
       "url": "https://t.me/dragoniacitybot?start=RZLL4J",
       "joined_at": 1794429001.110995,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794460178.550233
     },
     "8831470296": {
       "id": 8831470296,
