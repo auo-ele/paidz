@@ -445,6 +445,14 @@
       "url": "https://t.me/G_Planets",
       "joined_at": 1794491634.8402374,
       "status": "active"
+    },
+    "9012056668": {
+      "id": 9012056668,
+      "username": "StableAppRobot",
+      "title": "Stable robot",
+      "url": "https://t.me/StableAppRobot?start=HFR6572YEE",
+      "joined_at": 1794496575.9693007,
+      "status": "active"
     }
   }
 }
