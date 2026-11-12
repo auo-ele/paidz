@@ -447,7 +447,8 @@
       "title": "https://t.me/G_Planets",
       "url": "https://t.me/G_Planets",
       "joined_at": 1794491634.8402374,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794522805.8719227
     },
     "9012056668": {
       "id": 9012056668,
