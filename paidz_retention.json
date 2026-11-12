@@ -420,7 +420,8 @@
       "title": "Bank",
       "url": "https://t.me/TheGramBank_bot?start=ref_1190801375",
       "joined_at": 1794477075.5254788,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794506101.8756747
     },
     "8892552100": {
       "id": 8892552100,
