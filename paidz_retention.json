@@ -582,7 +582,8 @@
       "title": "Earn $RABBIT",
       "url": "https://t.me/OgRabbitBot/play?startapp=6118378156",
       "joined_at": 1794556771.591452,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794586584.928641
     },
     "4342863314": {
       "id": 4342863314,
