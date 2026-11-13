@@ -528,7 +528,8 @@
       "title": "Game Test",
       "url": "https://t.me/gameqp8",
       "joined_at": 1794516752.7010608,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794547758.7327793
     },
     "2095980300": {
       "id": 2095980300,
@@ -536,7 +537,8 @@
       "title": "VIP - БЛОГ ИНВЕСТОРА 🌴🔥",
       "url": "https://t.me/vipmon_channel",
       "joined_at": 1794518172.1385183,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794547763.0468454
     },
     "3901906840": {
       "id": 3901906840,
