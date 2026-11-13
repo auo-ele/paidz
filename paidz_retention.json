@@ -465,7 +465,8 @@
       "title": "Airdrop Harvest",
       "url": "https://t.me/AirdropHarvestHub",
       "joined_at": 1794498411.3681436,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794530112.4560986
     },
     "8557202305": {
       "id": 8557202305,
@@ -473,7 +474,8 @@
       "title": "Запуск бота",
       "url": "https://t.me/CoCoGram_game_bot?start=p_denisionc",
       "joined_at": 1794499661.3656054,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794530115.0194418
     },
     "9181907225": {
       "id": 9181907225,
