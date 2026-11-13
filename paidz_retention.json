@@ -510,7 +510,8 @@
       "title": "Новый Stepn - ходи и зарабатывай",
       "url": "https://t.me/slippergo_bot?start=club_46",
       "joined_at": 1794512118.2586358,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794544086.3800125
     },
     "1002455436": {
       "id": 1002455436,
@@ -518,7 +519,8 @@
       "title": "MrScrooge | Секреты Богатства 🎩",
       "url": "https://t.me/mrscrooge_pro",
       "joined_at": 1794512153.6271017,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794544090.7757323
     },
     "4358230989": {
       "id": 4358230989,
