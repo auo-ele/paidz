@@ -555,7 +555,8 @@
       "title": "Victor Company",
       "url": "https://t.me/Victors_Company_bot/app?startapp=ref_4F44E0DB19",
       "joined_at": 1794527401.957935,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794557957.3185759
     },
     "3997116296": {
       "id": 3997116296,
