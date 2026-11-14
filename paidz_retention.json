@@ -741,6 +741,14 @@
       "url": "https://t.me/zynexa_appbot?start=zyn_937051e532c1",
       "joined_at": 1794664998.36268,
       "status": "active"
+    },
+    "9160575074": {
+      "id": 9160575074,
+      "username": "MicroTrade_aibot",
+      "title": "AI",
+      "url": "https://t.me/MicroTrade_aibot?start=ref_1190801375",
+      "joined_at": 1794678838.2777386,
+      "status": "active"
     }
   }
 }
