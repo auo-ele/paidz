@@ -690,7 +690,8 @@
       "title": "Lifetime Energy",
       "url": "https://t.me/lifetime_energy_bot?start=8954036308",
       "joined_at": 1794631557.8248653,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794661206.445057
     },
     "8934777342": {
       "id": 8934777342,
