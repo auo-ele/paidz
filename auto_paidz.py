@@ -902,43 +902,76 @@ class PaidZClient:
                 return True
 
             if not raw_items:
-                return False
+                log("GATE", f"✅ Task Gate trống (0 nhiệm vụ yêu cầu), sẵn sàng xem quảng cáo.", Fore.GREEN)
+                return True
 
-            actionable_items = []
-            for it in raw_items:
-                if not isinstance(it, bytes):
-                    continue
-                tf = decode_proto(it)
-                cid = tf.get(1, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(1), bytes) else str(tf.get(1, ''))
-                title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2, ''))
-                if cid and cid not in self._skipped_gate_cache:
-                    actionable_items.append((cid, title, extract_url_from_proto_fields(tf)))
+            log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Đang kiểm tra và giải quyết...", Fore.YELLOW)
 
-            if not actionable_items:
-                log("GATE_LOCK", "⚠️ Tất cả nhiệm vụ trong Task Gate hiện tại đều đã hết hạn (HTTP 400). Tạm khóa Gate 15 phút để tránh lặp vô tận!", Fore.MAGENTA)
-                self.gate_deadlocked_until = time.time() + 900
-                return False
+            # Vòng lặp giải quyết Task Gate: thử start task, nếu task hết hạn (HTTP 400) thì skip ngay
+            max_skip_loops = 30
+            for loop_idx in range(max_skip_loops):
+                r_current_gate = self.http.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
+                if r_current_gate.status_code != 200:
+                    break
+                curr_data = decode_proto(r_current_gate.content)
+                curr_completed = curr_data.get(1, 0)
+                curr_required = curr_data.get(2, 0)
 
-            log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Có {len(actionable_items)} nhiệm vụ khả dụng...", Fore.YELLOW)
+                if (curr_required > 0 and curr_completed >= curr_required) or (curr_completed is None and curr_required is None):
+                    log("GATE", f"✅ Đã mở khóa Task Gate thành công ({curr_completed}/{curr_required})!", Fore.GREEN)
+                    return True
 
-            unlocked_any = False
-            for cid, title, url_str in actionable_items:
-                success = await self.execute_campaign_flow(cid, title, url_str, tag_name="GATE")
-                if success:
-                    completed += 1
-                    unlocked_any = True
-                    if required > 0 and completed >= required:
-                        log("GATE", f"✅ Đã mở khóa đủ yêu cầu Task Gate ({completed}/{required})!", Fore.GREEN)
-                        break
-                else:
-                    self._skipped_gate_cache.add(cid)
+                curr_raw = curr_data.get(4, [])
+                if not isinstance(curr_raw, list):
+                    curr_raw = [curr_raw]
 
-            if not unlocked_any:
-                log("GATE_LOCK", "⚠️ Không thể hoàn thành nhiệm vụ Gate nào (lỗi phía Server). Tạm nghỉ Gate 15 phút!", Fore.MAGENTA)
-                self.gate_deadlocked_until = time.time() + 900
-                return False
+                if not curr_raw:
+                    log("GATE", "✅ Danh sách Task Gate đã được xử lý xong!", Fore.GREEN)
+                    return True
 
-            return True
+                unlocked_flow = False
+                for it in curr_raw:
+                    if not isinstance(it, bytes):
+                        continue
+                    tf = decode_proto(it)
+                    cid = tf.get(1, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(1), bytes) else str(tf.get(1, ''))
+                    title = tf.get(2, b'').decode('utf-8', errors='ignore') if isinstance(tf.get(2), bytes) else str(tf.get(2, ''))
+                    url_str = extract_url_from_proto_fields(tf)
+
+                    if not cid:
+                        continue
+
+                    # Thử xem task có start được không
+                    r_test_start = self.http.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
+                    if r_test_start.status_code == 200:
+                        log("GATE", f"▶️ Phát hiện nhiệm vụ Gate khả dụng: '{title}' ({cid})", Fore.CYAN)
+                        success = await self.execute_campaign_flow(cid, title, url_str, tag_name="GATE")
+                        if success:
+                            unlocked_flow = True
+                            break
+                    else:
+                        # Nhiệm vụ hết hạn/lỗi (HTTP 400), tự động Skip để lấy nhiệm vụ mới hoặc giải phóng Gate
+                        log("GATE_SKIP", f"⏩ Nhiệm vụ '{title}' hết hạn. Đang Skip để mở khóa Gate...", Fore.YELLOW)
+                        skip_headers = headers.copy()
+                        skip_headers['Content-Type'] = 'application/json'
+                        self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
+                        await asyncio.sleep(0.5)
+
+                if unlocked_flow:
+                    # Đã hoàn thành 1 task, kiểm tra tiếp vòng lặp
+                    await asyncio.sleep(1)
+
+            # Kiểm tra trạng thái cuối cùng
+            r_final = self.http.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
+            if r_final.status_code == 200:
+                final_data = decode_proto(r_final.content)
+                f_comp = final_data.get(1, 0)
+                f_req = final_data.get(2, 0)
+                if (f_req > 0 and f_comp >= f_req) or not final_data.get(4):
+                    log("GATE", "✅ Task Gate đã được mở khóa hoàn toàn!", Fore.GREEN)
+                    return True
+
+            return False
         except Exception as e:
             log("GATE_ERR", f"Lỗi xử lý Task Gate: {e}", Fore.RED)
             return False
@@ -999,6 +1032,197 @@ class PaidZClient:
                                 log("TASK", f"🛡️ Giữ nhóm '{title}' trong tài khoản tối thiểu 8 tiếng để đảm bảo PaidZ tính tiền đầy đủ!", Fore.CYAN)
         except Exception as e:
             log("TASK_ERR", f"Lỗi claim nhiệm vụ: {e}", Fore.RED)
+
+    async def play_daily_minigames(self):
+        headers = self.get_headers()
+
+        # 1. Memory Pairs Game (Tối đa 3 lượt/ngày, 0.005 USDT/lượt)
+        try:
+            while True:
+                r_st = self.http.get(f"{API_BASE}/games/memory/status", headers=headers, timeout=10)
+                if r_st.status_code != 200:
+                    break
+                st = decode_proto(r_st.content)
+                used = int(st.get(3, 0))
+                limit = int(st.get(4, 3))
+                if used >= limit:
+                    break
+
+                log("GAME_MEMORY", f"🧠 Đang giải đố Memory Pairs (Lượt {used + 1}/{limit})...", Fore.CYAN)
+                body_start = b"".join([
+                    enc_string(1, str(int(time.time() * 1000))),
+                    enc_string(2, "MEMORY_PAIRS")
+                ])
+                r_start = self.http.post(f"{API_BASE}/games/memory/start", data=body_start, headers=headers, timeout=10)
+                if r_start.status_code != 200:
+                    break
+                dec_start = decode_proto(r_start.content)
+                if not dec_start.get(1):
+                    break
+
+                sid_raw = dec_start.get(2, b"")
+                sid = sid_raw.decode("utf-8", errors="ignore") if isinstance(sid_raw, bytes) else str(sid_raw)
+
+                known_symbols = {}
+                matched = set()
+                pairs_matched = 0
+                idx = 0
+                old_bal = self.balance
+
+                while pairs_matched < 6 and idx < 12:
+                    if idx in matched:
+                        idx += 1
+                        continue
+
+                    # Lật lá bài thứ nhất
+                    r1 = self.http.post(f"{API_BASE}/games/memory/flip", data=b"".join([enc_string(1, sid), enc_int32(2, idx)]), headers=headers, timeout=10)
+                    if r1.status_code != 200:
+                        break
+                    d1 = decode_proto(r1.content)
+                    raw_s1 = d1.get(3, b"")
+                    sym1 = raw_s1.decode("utf-8", errors="ignore") if isinstance(raw_s1, bytes) else str(raw_s1)
+                    known_symbols[idx] = sym1
+
+                    # Tìm xem vị trí của lá bài cặp đã biết trước đó
+                    pair_idx = None
+                    for k, s in known_symbols.items():
+                        if k != idx and s == sym1 and k not in matched:
+                            pair_idx = k
+                            break
+
+                    if pair_idx is not None:
+                        await asyncio.sleep(0.4)
+                        r2 = self.http.post(f"{API_BASE}/games/memory/flip", data=b"".join([enc_string(1, sid), enc_int32(2, pair_idx)]), headers=headers, timeout=10)
+                        if r2.status_code == 200:
+                            d2 = decode_proto(r2.content)
+                            matched.add(idx)
+                            matched.add(pair_idx)
+                            pairs_matched += 1
+                            if d2.get(9) == b"WON":
+                                rw = float(d2.get(12, 0.005))
+                                self.balance = float(d2.get(13, self.balance + rw))
+                                log("GAME_MEMORY", f"🎉 Thắng Memory Pairs! +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                break
+                    else:
+                        # Lật lá bài tiếp theo chưa biết
+                        next_idx = None
+                        for cand in range(12):
+                            if cand != idx and cand not in matched and cand not in known_symbols:
+                                next_idx = cand
+                                break
+                        if next_idx is None:
+                            for cand in range(12):
+                                if cand != idx and cand not in matched:
+                                    next_idx = cand
+                                    break
+                        if next_idx is None:
+                            break
+
+                        await asyncio.sleep(0.4)
+                        r2 = self.http.post(f"{API_BASE}/games/memory/flip", data=b"".join([enc_string(1, sid), enc_int32(2, next_idx)]), headers=headers, timeout=10)
+                        if r2.status_code == 200:
+                            d2 = decode_proto(r2.content)
+                            raw_s2 = d2.get(3, b"")
+                            sym2 = raw_s2.decode("utf-8", errors="ignore") if isinstance(raw_s2, bytes) else str(raw_s2)
+                            known_symbols[next_idx] = sym2
+                            if sym1 == sym2:
+                                matched.add(idx)
+                                matched.add(next_idx)
+                                pairs_matched += 1
+                                if d2.get(9) == b"WON":
+                                    rw = float(d2.get(12, 0.005))
+                                    self.balance = float(d2.get(13, self.balance + rw))
+                                    log("GAME_MEMORY", f"🎉 Thắng Memory Pairs! +{rw:.4f} USDT | Số dư: {self.balance:.4f} USDT", Fore.GREEN)
+                                    break
+
+                    await asyncio.sleep(0.4)
+                    idx += 1
+                await asyncio.sleep(1)
+        except Exception as e:
+            log("GAME_ERR", f"Lỗi chơi Memory Pairs: {e}", Fore.RED)
+
+        # 2. TicTacToe Minigame (Tối đa 3 lượt/ngày, 0.005 USDT/thắng)
+        try:
+            lines = [
+                [0, 1, 2], [3, 4, 5], [6, 7, 8],
+                [0, 3, 6], [1, 4, 7], [2, 5, 8],
+                [0, 4, 8], [2, 4, 6]
+            ]
+            def _get_best_move(board_bytes):
+                b_str = board_bytes.decode('utf-8', errors='ignore') if isinstance(board_bytes, bytes) else str(board_bytes)
+                board = list(b_str)
+                # 1. Thắng ngay nếu có nước tạo chuỗi 3
+                for line in lines:
+                    vals = [board[i] for i in line]
+                    if vals.count('X') == 2 and vals.count('_') == 1:
+                        return line[vals.index('_')]
+                # 2. Chặn nước thắng của máy (O)
+                for line in lines:
+                    vals = [board[i] for i in line]
+                    if vals.count('O') == 2 and vals.count('_') == 1:
+                        return line[vals.index('_')]
+                # 3. Ưu tiên ô tâm (ô 4)
+                if board[4] == '_':
+                    return 4
+                # 4. Ưu tiên 4 góc
+                corners = [i for i in [0, 2, 6, 8] if board[i] == '_']
+                if corners:
+                    return random.choice(corners)
+                # 5. Các ô còn lại
+                empty = [i for i in range(9) if board[i] == '_']
+                return random.choice(empty) if empty else None
+
+            while True:
+                r_st = self.http.get(f"{API_BASE}/games/tictactoe/status", headers=headers, timeout=10)
+                if r_st.status_code != 200:
+                    break
+                st = decode_proto(r_st.content)
+                used = int(st.get(3, 0))
+                limit = int(st.get(4, 3))
+                if used >= limit:
+                    break
+
+                log("GAME_TTT", f"⭕ Đang đấu cờ Caro TicTacToe (Lượt {used + 1}/{limit})...", Fore.CYAN)
+                body_start = b"".join([
+                    enc_string(1, str(int(time.time() * 1000))),
+                    enc_string(2, "TIC_TAC_TOE")
+                ])
+                r_start = self.http.post(f"{API_BASE}/games/tictactoe/start", data=body_start, headers=headers, timeout=10)
+                if r_start.status_code != 200:
+                    break
+                dec_start = decode_proto(r_start.content)
+                if not dec_start.get(1):
+                    break
+
+                sess_raw = dec_start.get(2)
+                sess = decode_proto(sess_raw) if isinstance(sess_raw, bytes) else {}
+                sid = sess.get(1, b'').decode('utf-8', errors='ignore') if isinstance(sess.get(1), bytes) else str(sess.get(1))
+                board_bytes = sess.get(2, b'_________')
+
+                while True:
+                    move = _get_best_move(board_bytes)
+                    if move is None:
+                        break
+                    await asyncio.sleep(0.5)
+                    r_move = self.http.post(f"{API_BASE}/games/tictactoe/move", data=b"".join([enc_string(1, sid), enc_int32(2, move)]), headers=headers, timeout=10)
+                    if r_move.status_code != 200:
+                        break
+                    m_dec = decode_proto(r_move.content)
+                    sess_sub = decode_proto(m_dec.get(2)) if isinstance(m_dec.get(2), bytes) else {}
+                    board_bytes = sess_sub.get(2, b'_________')
+                    raw_state = sess_sub.get(3, b'')
+                    state = raw_state.decode('utf-8', errors='ignore') if isinstance(raw_state, bytes) else str(raw_state)
+
+                    if state in ['WON', 'LOST', 'DRAW']:
+                        self.balance = float(m_dec.get(3, self.balance))
+                        if state == 'WON':
+                            log("GAME_TTT", f"🎉 Thắng TicTacToe! Số dư mới: {self.balance:.4f} USDT", Fore.GREEN)
+                        else:
+                            log("GAME_TTT", f"🎮 Kết thúc ván cờ: {state} | Số dư: {self.balance:.4f} USDT", Fore.CYAN)
+                        break
+                await asyncio.sleep(1)
+        except Exception as e:
+            log("GAME_ERR", f"Lỗi chơi TicTacToe: {e}", Fore.RED)
 
     async def claim_community_campaigns(self):
         try:
@@ -1085,15 +1309,15 @@ class PaidZClient:
             if not session_token:
                 return False, 5
 
-            # Thời lượng xem tự nhiên (8.5 - 11.5s) mô phỏng người dùng thật xem video/interstitial ad
-            view_seconds = max(min_duration, 7) + round(random.uniform(1.8, 3.8), 2)
+            # Thời lượng xem tự nhiên (6.5 - 9.5s) mô phỏng người dùng thật xem video/interstitial ad
+            view_seconds = max(min_duration, 6) + round(random.uniform(0.8, 2.5), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
             await asyncio.sleep(view_seconds)
 
-            # Đảm bảo khoảng cách giữa 2 lần claim QC cách nhau ít nhất 18.5s theo quy định máy chủ PaidZ
+            # Đảm bảo khoảng cách giữa 2 lần claim QC cách nhau ít nhất 15.5s theo quy định máy chủ PaidZ
             elapsed_since_last_claim = time.time() - self.last_ad_claim_time
-            if elapsed_since_last_claim < 18.5:
-                extra_wait = round(18.5 - elapsed_since_last_claim, 1)
+            if elapsed_since_last_claim < 15.5:
+                extra_wait = round(15.5 - elapsed_since_last_claim, 1)
                 await asyncio.sleep(extra_wait)
 
             duration_ms = view_seconds * 1000.0
@@ -1190,6 +1414,7 @@ async def main_loop():
         await bot.check_and_unlock_task_gate()
         bot.spin_lucky_wheel()
         await bot.claim_available_tasks()
+        await bot.play_daily_minigames()
         await bot.claim_community_campaigns()
 
         start_time = time.time()
@@ -1229,6 +1454,8 @@ async def main_loop():
 
                 if (time.time() - last_task_check_time) >= 3600:
                     await bot.claim_available_tasks()
+                    await bot.play_daily_minigames()
+                    bot.spin_lucky_wheel()
                     await bot.claim_community_campaigns()
                     await bot.cleanup_expired_retention_channels()
                     git_sync_retention()
@@ -1267,13 +1494,13 @@ async def main_loop():
                 if success:
                     ads_session_count += 1
 
-                if ads_session_count >= random.randint(5, 7):
-                    rest_seconds = round(random.uniform(10.0, 20.0), 1)
+                if ads_session_count >= random.randint(6, 8):
+                    rest_seconds = round(random.uniform(6.0, 12.0), 1)
                     log("REST", f"☕ Nghỉ ngắn {rest_seconds}s (Anti‑Fatigue)...", Fore.MAGENTA)
                     await asyncio.sleep(rest_seconds)
                     ads_session_count = 0
                 else:
-                    gap_sleep = round(random.uniform(8.0, 11.0), 1)
+                    gap_sleep = round(random.uniform(5.0, 7.5), 1)
                     await asyncio.sleep(gap_sleep)
 
             except KeyboardInterrupt:
