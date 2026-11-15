@@ -797,6 +797,14 @@
       "url": "https://t.me/sklad_halavy",
       "joined_at": 1794721512.0705733,
       "status": "active"
+    },
+    "8874458032": {
+      "id": 8874458032,
+      "username": "Gram_Rewardbot",
+      "title": "GRAM Reward",
+      "url": "https://t.me/Gram_Rewardbot/app",
+      "joined_at": 1794725373.3061476,
+      "status": "active"
     }
   }
 }
