@@ -807,7 +807,8 @@
       "title": "GRAM Reward",
       "url": "https://t.me/Gram_Rewardbot/app",
       "joined_at": 1794725373.3061476,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794757556.5619302
     },
     "9217074530": {
       "id": 9217074530,
