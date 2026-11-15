@@ -829,6 +829,14 @@
       "url": "https://t.me/LILICoinCommunity",
       "joined_at": 1794737412.731775,
       "status": "active"
+    },
+    "8823465549": {
+      "id": 8823465549,
+      "username": "GramFarmingbot_bot",
+      "title": "Gram Farming",
+      "url": "https://t.me/GramFarmingbot_bot?start=ad1",
+      "joined_at": 1794737439.0437975,
+      "status": "active"
     }
   }
 }
