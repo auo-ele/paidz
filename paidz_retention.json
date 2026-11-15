@@ -762,7 +762,8 @@
       "title": "Social Task Hub",
       "url": "https://t.me/socialtaskh",
       "joined_at": 1794681194.1881797,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794711470.0494187
     },
     "9132397869": {
       "id": 9132397869,
