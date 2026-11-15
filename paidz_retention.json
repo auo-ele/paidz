@@ -834,7 +834,8 @@
       "title": "LILI Community",
       "url": "https://t.me/LILICoinCommunity",
       "joined_at": 1794737412.731775,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794767818.189449
     },
     "8823465549": {
       "id": 8823465549,
@@ -842,7 +843,8 @@
       "title": "Gram Farming",
       "url": "https://t.me/GramFarmingbot_bot?start=ad1",
       "joined_at": 1794737439.0437975,
-      "status": "active"
+      "status": "left",
+      "left_at": 1794767820.624956
     },
     "9178475456": {
       "id": 9178475456,
