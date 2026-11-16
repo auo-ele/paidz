@@ -1,0 +1,58 @@
+name: Auto PaidZ ($USDT) 24/7 - Acc 1 (hungzai22)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Lịch chạy đúng 00:00 đêm giờ Việt Nam mỗi ngày (17:00 UTC)
+    - cron: '0 17 * * *'
+
+concurrency:
+  group: paidz-acc1-run
+  cancel-in-progress: true
+
+jobs:
+  run-paidz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install telethon requests colorama; fi
+
+      - name: Chay Auto PaidZ Stealth 24/7 (Acc 1 - hungzai22)
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          GITHUB_REPOSITORY: "auo-ele/paidz"
+          WORKFLOW_FILE: "paidz_acc1.yml"
+          TELEGRAM_API_ID: "34333329"
+          TELEGRAM_API_HASH: "4f9371f95000578c84dbc670aaf1f819"
+          TELEGRAM_STRING_SESSION: "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
+          GH_PAT: ${{ secrets.GH_PAT }}
+          MAX_RUNTIME_SECONDS: "17500"
+        run: |
+          python auto_paidz.py
+
+      - name: Sync retention state to repository
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add paidz_retention.json || true
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: persist paidz retention state [skip ci]"
+            git push "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git" HEAD:main || true
+          fi
