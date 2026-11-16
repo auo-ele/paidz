@@ -872,7 +872,7 @@ class PaidZClient:
             else:
                 err_info = decode_proto(r_c.content)
                 log(f"{tag_name}_WARN", f"Claim lần {attempt+1} lỗi (HTTP {r_c.status_code}): {err_info}", Fore.YELLOW)
-                await asyncio.sleep(4)
+                await asyncio.sleep(1.5)
 
         if joined_entity:
             log(tag_name, f"🛡️ Giữ nhóm '{title}' trong tài khoản tối thiểu 8 tiếng để đảm bảo PaidZ tính tiền đầy đủ!", Fore.CYAN)
@@ -1019,7 +1019,7 @@ class PaidZClient:
                                 joined_entity = await self.tg_join_target(url_str)
                                 if joined_entity:
                                     self.record_joined_channel(joined_entity, url_str, title)
-                                await asyncio.sleep(5)
+                                await asyncio.sleep(1.5)
 
                             r_c = self.http.post(f"{API_BASE}/tasks/{tid}/claim", data=enc_string(1, tid), headers=headers, timeout=10)
                             if r_c.status_code == 200:
@@ -1246,7 +1246,7 @@ class PaidZClient:
 
                         await self.execute_campaign_flow(cid, title, url_str, tag_name="CAMPAIGN")
                         self.claimed_campaign_ids.add(cid)
-                        await asyncio.sleep(4)
+                        await asyncio.sleep(1.5)
         except Exception as e:
             log("CAMPAIGN_ERR", f"Lỗi nhiệm vụ cộng đồng: {e}", Fore.RED)
 
@@ -1310,14 +1310,14 @@ class PaidZClient:
                 return False, 5
 
             # Thời lượng xem tự nhiên (6.5 - 9.5s) mô phỏng người dùng thật xem video/interstitial ad
-            view_seconds = max(min_duration, 6) + round(random.uniform(0.8, 2.5), 2)
+            view_seconds = max(min_duration, 4) + round(random.uniform(0.3, 0.8), 2)
             log("WATCHING", f"🎬 Đang xem quảng cáo '{network_name}'... (thời lượng {view_seconds:.1f}s)", Fore.CYAN)
             await asyncio.sleep(view_seconds)
 
             # Đảm bảo khoảng cách giữa 2 lần claim QC cách nhau ít nhất 15.5s theo quy định máy chủ PaidZ
             elapsed_since_last_claim = time.time() - self.last_ad_claim_time
-            if elapsed_since_last_claim < 15.5:
-                extra_wait = round(15.5 - elapsed_since_last_claim, 1)
+            if elapsed_since_last_claim < 11.2:
+                extra_wait = round(11.2 - elapsed_since_last_claim, 1)
                 await asyncio.sleep(extra_wait)
 
             duration_ms = view_seconds * 1000.0
@@ -1494,13 +1494,13 @@ async def main_loop():
                 if success:
                     ads_session_count += 1
 
-                if ads_session_count >= random.randint(6, 8):
-                    rest_seconds = round(random.uniform(6.0, 12.0), 1)
+                if ads_session_count >= random.randint(12, 16):
+                    rest_seconds = round(random.uniform(3.0, 5.0), 1)
                     log("REST", f"☕ Nghỉ ngắn {rest_seconds}s (Anti‑Fatigue)...", Fore.MAGENTA)
                     await asyncio.sleep(rest_seconds)
                     ads_session_count = 0
                 else:
-                    gap_sleep = round(random.uniform(5.0, 7.5), 1)
+                    gap_sleep = round(random.uniform(1.2, 2.5), 1)
                     await asyncio.sleep(gap_sleep)
 
             except KeyboardInterrupt:
