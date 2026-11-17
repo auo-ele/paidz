@@ -294,6 +294,16 @@ def is_protected_entity(entity):
         return True
     return False
 
+def is_impossible_game_task(title: str, cid: str, url_str: str) -> bool:
+    """Nhận diện các nhiệm vụ Game bên thứ 3, yêu cầu đạt Level/Cấp độ hoặc nạp tiền không thể giải quyết tự động"""
+    text = f"{title} {cid} {url_str}".lower()
+    keywords = [
+        "cấp độ", "level", "đạt cấp", "reach level", "reach lvl", "stage",
+        "thousand_blades", "thousandblades", "game", "chơi game", "nạp", "deposit",
+        "play", "install", "tải app", "tải game", "đua top"
+    ]
+    return any(k in text for k in keywords)
+
 # -----------------------------------------------------------------
 # CLIENT PAIDZ & TELETHON TỐI ƯU
 # -----------------------------------------------------------------
@@ -315,6 +325,8 @@ class PaidZClient:
         self.claimed_campaign_ids = set()
         self.exhausted_networks = set()
         self._skipped_gate_cache = set()
+        self.failed_gate_tasks = set()
+        self.tg_disabled = False
         self.gate_deadlocked_until = 0
         self.last_ad_claim_time = 0.0
         self.global_ad_cooldown_until = 0.0
@@ -383,6 +395,10 @@ class PaidZClient:
         if not url or ("t.me/" not in url and "telegram.me/" not in url) or "/i/userpic/" in url:
             return None
 
+        if self.tg_disabled:
+            log("TG_DISABLED", f"🛑 Telegram đang bị khóa bảo vệ (FloodWait), bỏ qua tương tác với '{url}'!", Fore.YELLOW)
+            return None
+
         try:
             if not await self.ensure_tg_connected():
                 return None
@@ -428,10 +444,8 @@ class PaidZClient:
             entity = await self.tg_client.get_entity(username)
 
             if getattr(entity, "bot", False):
-                start_param = query.get("start", [query.get("startapp", [""])[0]])[0]
-                cmd = f"/start {start_param}".strip()
-                log("TG_BOT", f"🤖 Đang gửi '{cmd}' tới bot @{username}...", Fore.CYAN)
-                await self.tg_client.send_message(entity, cmd)
+                # TUYỆT ĐỐI KHÔNG GỬI /start VÀO BOT BÊN THỨ 3 / GAME ĐỂ TRÁNH BỊ TELEGRAM BANNED VÌ SPAM
+                log("TG_BOT", f"🤖 Mục tiêu là Bot bên thứ 3 @{username}. KHÔNG gửi tin nhắn /start để bảo vệ an toàn tài khoản tuyệt đối!", Fore.YELLOW)
                 return entity
 
             title = getattr(entity, "title", username)
@@ -452,8 +466,9 @@ class PaidZClient:
             return entity
 
         except FloodWaitError as e:
-            log("TG_FLOOD", f"⏳ Telegram FloodWait: Cần chờ {e.seconds}s...", Fore.YELLOW)
-            await asyncio.sleep(min(e.seconds, 60))
+            self.tg_disabled = True
+            log("TG_FLOOD", f"🛑 DÍNH TELEGRAM FLOODWAIT {e.seconds}s: VÔ HIỆU HÓA HOÀN TOÀN MỌI HOẠT ĐỘNG TELEGRAM TRONG PHIÊN NÀY ĐỂ BẢO VỆ TÀI KHOẢN KHÔNG BỊ BAN!", Fore.RED)
+            return None
         except Exception as e:
             log("TG_JOIN_ERR", f"⚠️ Không thể Join '{url}': {e}", Fore.YELLOW)
         return None
@@ -855,8 +870,8 @@ class PaidZClient:
 
             log("GATE", f"🚧 Phát hiện Task Gate ({completed}/{required}). Đang kiểm tra và giải quyết...", Fore.YELLOW)
 
-            # Vòng lặp giải quyết Task Gate: thử start task, nếu task hết hạn (HTTP 400) thì skip ngay
-            max_skip_loops = 30
+            # Vòng lặp giải quyết Task Gate: tối đa 5 lượt, skip dứt khoát nhiệm vụ không khả thi
+            max_skip_loops = 5
             for loop_idx in range(max_skip_loops):
                 r_current_gate = self.http.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
                 if r_current_gate.status_code != 200:
@@ -889,6 +904,23 @@ class PaidZClient:
                     if not cid:
                         continue
 
+                    # Nếu đã nằm trong blacklist thất bại: skip ngay không thử lại
+                    if cid in self.failed_gate_tasks:
+                        skip_headers = headers.copy()
+                        skip_headers['Content-Type'] = 'application/json'
+                        self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
+                        continue
+
+                    # Nếu là nhiệm vụ Game / Level / Nạp tiền bên thứ 3 không khả thi: Skip ngay lập tức
+                    if is_impossible_game_task(title, cid, url_str):
+                        log("GATE_SKIP", f"🛡️ Bỏ qua nhiệm vụ Game/Level bên thứ 3: '{title}' ({cid}). Đang Skip để mở khóa Gate...", Fore.YELLOW)
+                        skip_headers = headers.copy()
+                        skip_headers['Content-Type'] = 'application/json'
+                        self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
+                        self.failed_gate_tasks.add(cid)
+                        await asyncio.sleep(0.5)
+                        continue
+
                     # Thử xem task có start được không
                     r_test_start = self.http.post(f"{API_BASE}/campaigns/{cid}/start", headers=headers, timeout=10)
                     if r_test_start.status_code == 200:
@@ -897,17 +929,28 @@ class PaidZClient:
                         if success:
                             unlocked_flow = True
                             break
+                        else:
+                            # Nếu claim không thành công: lập tức skip và đưa vào blacklist
+                            log("GATE_SKIP", f"⏩ Nhiệm vụ '{title}' claim thất bại. Đang Skip để giải phóng Gate...", Fore.YELLOW)
+                            skip_headers = headers.copy()
+                            skip_headers['Content-Type'] = 'application/json'
+                            self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
+                            self.failed_gate_tasks.add(cid)
+                            await asyncio.sleep(0.5)
                     else:
                         # Nhiệm vụ hết hạn/lỗi (HTTP 400), tự động Skip để lấy nhiệm vụ mới hoặc giải phóng Gate
                         log("GATE_SKIP", f"⏩ Nhiệm vụ '{title}' hết hạn. Đang Skip để mở khóa Gate...", Fore.YELLOW)
                         skip_headers = headers.copy()
                         skip_headers['Content-Type'] = 'application/json'
                         self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
+                        self.failed_gate_tasks.add(cid)
                         await asyncio.sleep(0.5)
 
                 if unlocked_flow:
-                    # Đã hoàn thành 1 task, kiểm tra tiếp vòng lặp
                     await asyncio.sleep(1)
+                else:
+                    # Không giải quyết được task nào trong lượt này, ngắt vòng lặp tránh spam
+                    break
 
             # Kiểm tra trạng thái cuối cùng
             r_final = self.http.get(f"{API_BASE}/campaigns/gate", headers=headers, timeout=10)
