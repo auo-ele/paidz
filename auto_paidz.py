@@ -345,18 +345,21 @@ class PaidZClient:
 
     async def ensure_tg_connected(self):
         if not self.tg_client.is_connected():
-            for attempt in range(3):
+            jitter = random.uniform(3, 10)
+            await asyncio.sleep(jitter)
+            for attempt in range(5):
                 try:
                     await self.tg_client.connect()
                     break
                 except Exception as e:
                     err_msg = str(e)
                     if "different IP" in err_msg or "AuthKeyDuplicated" in type(e).__name__:
-                        log("TELEGRAM_WARN", f"Session đang được giải phóng từ phiên trước, chờ 6s thử lại ({attempt+1}/3)...", Fore.YELLOW)
-                        await asyncio.sleep(6)
+                        wait_sec = 10 * (attempt + 1) + random.uniform(2, 6)
+                        log("TELEGRAM_WARN", f"Session đang được giải phóng từ phiên trước, chờ {wait_sec:.1f}s thử lại ({attempt+1}/5)...", Fore.YELLOW)
+                        await asyncio.sleep(wait_sec)
                     else:
                         log("TELEGRAM_ERR", f"Lỗi kết nối Telegram: {e}", Fore.RED)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
         if not self.tg_client.is_connected():
             return False
         if not await self.tg_client.is_user_authorized():
@@ -377,6 +380,8 @@ class PaidZClient:
             log("TG_BLOCK", f"🚫 ĐÃ BLOCK BOT @{uname} VĨNH VIỄN TRÊN TELEGRAM ĐỂ BẢO VỆ TÀI KHOẢN!", Fore.RED)
         except Exception as e:
             log("TG_BLOCK_WARN", f"Không thể block @{bot_target}: {e}", Fore.YELLOW)
+        finally:
+            await self.close_tg()
 
     async def close_tg(self):
         if self.tg_client.is_connected():
@@ -416,7 +421,9 @@ class PaidZClient:
                     return init_data
         except Exception as e:
             log("TELEGRAM_ERR", f"Lỗi lấy session init_data: {e}", Fore.RED)
-        return None
+            return None
+        finally:
+            await self.close_tg()
 
     async def tg_join_target(self, url: str):
         if not url or ("t.me/" not in url and "telegram.me/" not in url) or "/i/userpic/" in url:
@@ -498,7 +505,9 @@ class PaidZClient:
             return None
         except Exception as e:
             log("TG_JOIN_ERR", f"⚠️ Không thể Join '{url}': {e}", Fore.YELLOW)
-        return None
+            return None
+        finally:
+            await self.close_tg()
 
     async def tg_leave_target(self, entity):
         """CHẾ ĐỘ LƯU TRỮ VĨNH VIỄN: Tuyệt đối KHÔNG rời kênh/nhóm. Đưa kênh vào Thư mục Lưu Trữ (Archive - folder_id: 1)."""
