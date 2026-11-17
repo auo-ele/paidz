@@ -46,6 +46,7 @@ from telethon.tl.functions.messages import (
 )
 from telethon.tl.functions.folders import EditPeerFoldersRequest
 from telethon.tl.types import InputFolderPeer
+from telethon.tl.functions.contacts import BlockRequest
 from telethon.tl.functions.channels import (
     JoinChannelRequest,
     LeaveChannelRequest,
@@ -72,14 +73,13 @@ def _safe_int(val, default):
     except (TypeError, ValueError):
         return default
 
-TELEGRAM_API_ID = _safe_int(os.getenv("TELEGRAM_API_ID"), 34333329)
-TELEGRAM_API_HASH = (os.getenv("TELEGRAM_API_HASH") or "4f9371f95000578c84dbc670aaf1f819").strip()
+TELEGRAM_API_ID = _safe_int(os.getenv("TELEGRAM_API_ID"), 24719662)
+TELEGRAM_API_HASH = (os.getenv("TELEGRAM_API_HASH") or "1f6c433e38706fa2e7d77bdfd9a6fdf9").strip()
 TELEGRAM_STRING_SESSION = (os.getenv("TELEGRAM_STRING_SESSION") or (
-    "1BVtsOIIBuzNuH5Jfb4Uwek2dG7YRqSyFk-74KTokth0VB3_UTMwM8Edh_ikn83fJOGyN7JaWzIZXnro3ico"
-    "Y8zsjYIlT5nQ4z_GgKknABQ74FRseCvNbz3yyTkPOfQ4xJfZnJIJHuY4EkzVOzQzYZFg_EJWOj_vvg6OVwSk"
-    "Qv9Nd52tl_SlH4TofoxDXDNvxLJyFcoQFH6BegTybx-pFyX2tz0rMeR7AQujnGxqdWOd4zywoFVShzsCTFeq"
-    "dsBP9itJvg1YB0ISmJEYXzGEQo37IddAFGw3PJcAIY4BBctxri9_Cw-FbxhMgLU9gsotA3Rrys2jLcGV4CGf"
-    "Op_IzD0CmtNm845I="
+    "1BVtsOMMBu4twagryqQ2jg8Lq0r5ht_iJ-LHnM5qYYrNYGz6aTkbk6gA42gQZ9ZJs80wXSEzppw8z6RK4eKpp6qt"
+    "GAegFWNsoEbJpCmmd47phuoQ3YN1DPsxsX2uoWJQ60B18gArjt603YezUARHPh7opveQtVwZR9N9M8O4eSFDDQmF"
+    "HeglnaqniplilMXYSF1Jr7e9E2XevLm2MkYUv4roxlragUkxtKPlSoLOd0V2JMIKN9A4yOzsRHcdI4H33W1XwP1J"
+    "9UiQrb52gGxsf3i73f_NzbByCFlZPHh04aTRUhNtLBETfLb5XHLtwoxg5SOt24eSkBDRJOtaPCik32hnP3fQjTrQ="
 )).strip()
 
 API_BASE = "https://api.paidz.biz"
@@ -345,11 +345,38 @@ class PaidZClient:
 
     async def ensure_tg_connected(self):
         if not self.tg_client.is_connected():
-            await self.tg_client.connect()
+            for attempt in range(3):
+                try:
+                    await self.tg_client.connect()
+                    break
+                except Exception as e:
+                    err_msg = str(e)
+                    if "different IP" in err_msg or "AuthKeyDuplicated" in type(e).__name__:
+                        log("TELEGRAM_WARN", f"Session đang được giải phóng từ phiên trước, chờ 6s thử lại ({attempt+1}/3)...", Fore.YELLOW)
+                        await asyncio.sleep(6)
+                    else:
+                        log("TELEGRAM_ERR", f"Lỗi kết nối Telegram: {e}", Fore.RED)
+                        await asyncio.sleep(2)
+        if not self.tg_client.is_connected():
+            return False
         if not await self.tg_client.is_user_authorized():
             log("TELEGRAM", "❌ StringSession không hợp lệ hoặc đã hết hạn!", Fore.RED)
             return False
         return True
+
+    async def block_third_party_bot(self, bot_target: str):
+        """Block bot bên thứ 3 vĩnh viễn trên Telegram để ngăn chặn hoàn toàn tương tác spam"""
+        try:
+            if not await self.ensure_tg_connected():
+                return
+            uname = bot_target.replace("@", "").split("?")[0].strip()
+            if not uname:
+                return
+            ent = await self.tg_client.get_input_entity(uname)
+            await self.tg_client(BlockRequest(id=ent))
+            log("TG_BLOCK", f"🚫 ĐÃ BLOCK BOT @{uname} VĨNH VIỄN TRÊN TELEGRAM ĐỂ BẢO VỆ TÀI KHOẢN!", Fore.RED)
+        except Exception as e:
+            log("TG_BLOCK_WARN", f"Không thể block @{bot_target}: {e}", Fore.YELLOW)
 
     async def close_tg(self):
         if self.tg_client.is_connected():
@@ -911,13 +938,21 @@ class PaidZClient:
                         self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
                         continue
 
-                    # Nếu là nhiệm vụ Game / Level / Nạp tiền bên thứ 3 không khả thi: Skip ngay lập tức
+                    # Nếu là nhiệm vụ Game / Level / Nạp tiền bên thứ 3 không khả thi: Skip ngay lập tức & BLOCK bot
                     if is_impossible_game_task(title, cid, url_str):
-                        log("GATE_SKIP", f"🛡️ Bỏ qua nhiệm vụ Game/Level bên thứ 3: '{title}' ({cid}). Đang Skip để mở khóa Gate...", Fore.YELLOW)
+                        log("GATE_SKIP", f"🛡️ Bỏ qua nhiệm vụ Game/Level bên thứ 3: '{title}' ({cid}). Đang Skip (đổi nhiệm vụ)...", Fore.YELLOW)
                         skip_headers = headers.copy()
                         skip_headers['Content-Type'] = 'application/json'
                         self.http.post(f"{API_BASE}/campaigns/gate/skip", headers=skip_headers, json={"taskId": cid}, timeout=10)
                         self.failed_gate_tasks.add(cid)
+                        
+                        # Tự động BLOCK bot bên thứ 3 trên Telegram
+                        bot_m = re.search(r't\.me/([^/?]+)', url_str)
+                        if bot_m:
+                            target_bot = bot_m.group(1)
+                            if any(k in target_bot.lower() for k in ["bot", "game", "blade", "thousand"]):
+                                await self.block_third_party_bot(target_bot)
+                        
                         await asyncio.sleep(0.5)
                         continue
 
