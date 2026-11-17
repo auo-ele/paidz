@@ -997,6 +997,9 @@ class PaidZClient:
                     log("GATE", "✅ Task Gate đã được mở khóa hoàn toàn!", Fore.GREEN)
                     return True
 
+            # Theo yêu cầu người dùng: Nghỉ 60 giây (1 phút) rồi kiểm tra lại, không lặp vô tận
+            self.gate_deadlocked_until = time.time() + 60
+            log("GATE", "⏳ Task Gate chưa mở khóa hoặc đang chờ duyệt, nghỉ 60s (1 phút) rồi kiểm tra lại...", Fore.YELLOW)
             return False
         except Exception as e:
             log("GATE_ERR", f"Lỗi xử lý Task Gate: {e}", Fore.RED)
@@ -1301,7 +1304,8 @@ class PaidZClient:
                 if b'TASK_GATE_REQUIRED' in err_code or b'TASK_GATE' in err_msg:
                     gate_ok = await self.check_and_unlock_task_gate()
                     if not gate_ok:
-                        return False, 900
+                        log("GATE_WAIT", "⏳ Task Gate chưa mở khóa hoặc đang chờ duyệt, nghỉ 60s (1 phút) rồi kiểm tra lại...", Fore.YELLOW)
+                        return False, 60
                     return False, 3
 
                 if b'DAILY_LIMIT_REACHED' in err_code or b'Daily limit' in err_msg:
