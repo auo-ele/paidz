@@ -459,100 +459,23 @@ class PaidZClient:
         return None
 
     async def tg_leave_target(self, entity):
-        # CHE DO GIU VINH VIEN: KHONG BAO GIO ROI KENH, CHI LUU TRU (ARCHIVE)
+        """CHẾ ĐỘ LƯU TRỮ VĨNH VIỄN: Tuyệt đối KHÔNG rời kênh/nhóm. Đưa kênh vào Thư mục Lưu Trữ (Archive - folder_id: 1)."""
         if not entity:
             return
         try:
             if await self.ensure_tg_connected():
+                if isinstance(entity, (int, str)):
+                    try:
+                        entity = await self.tg_client.get_entity(entity)
+                    except Exception:
+                        return
                 input_peer = await self.tg_client.get_input_entity(entity)
                 await self.tg_client(EditPeerFoldersRequest(folder_peers=[InputFolderPeer(peer=input_peer, folder_id=1)]))
-        except Exception:
-            pass
-        return
-
-        # KIỂM TRA BẢO VỆ KÊNH CHÍNH THỨC (@PAIDZ_NEWS / ID: 2307369718)
-        if is_protected_entity(entity):
-            title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
-            log("TG_KEEP", f"🛡️ Giữ nguyên kênh chính thức '{title}' (ID: {getattr(entity, 'id', '')}) - Không rời kênh!", Fore.CYAN)
-            return
-
-        try:
-            if not await self.ensure_tg_connected():
-                return
-
-            if isinstance(entity, (int, str)):
-                try:
-                    entity = await self.tg_client.get_entity(entity)
-                except Exception as e:
-                    log("TG_LEAVE_ERR", f"Không tìm thấy entity {entity} để rời: {e}", Fore.YELLOW)
-                    return
-
-            if is_protected_entity(entity):
                 title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
-                log("TG_KEEP", f"🛡️ Giữ nguyên kênh chính thức '{title}' - Không rời kênh!", Fore.CYAN)
-                return
-
-            title = getattr(entity, "title", None) or getattr(entity, "username", str(getattr(entity, "id", "Target")))
-
-            if getattr(entity, "bot", False):
-                log("TG_CLEAN", f"🧹 Đang dọn dẹp hội thoại với bot '{title}'...", Fore.MAGENTA)
-                await self.tg_client.delete_dialog(entity, revoke=True)
-                log("TG_CLEAN", f"✅ Đã xóa hội thoại bot '{title}'!", Fore.GREEN)
-                return
-
-            log("TG_LEAVE", f"🚪 Đang rời khỏi '{title}' (ID: {entity.id})...", Fore.MAGENTA)
-
-            if isinstance(entity, Channel) or hasattr(entity, "access_hash"):
-                input_chan = InputChannel(channel_id=entity.id, access_hash=entity.access_hash)
-                input_peer = InputPeerChannel(channel_id=entity.id, access_hash=entity.access_hash)
-
-                try:
-                    await self.tg_client(LeaveChannelRequest(channel=input_chan))
-                except UserNotParticipantError:
-                    pass
-                except Exception:
-                    pass
-
-                try:
-                    await self.tg_client.delete_dialog(input_peer, revoke=True)
-                except Exception:
-                    pass
-
-                await asyncio.sleep(1.5)
-                still_inside = False
-                try:
-                    await self.tg_client(GetParticipantRequest(channel=input_chan, participant="me"))
-                    still_inside = True
-                except (UserNotParticipantError, ChannelPrivateError):
-                    still_inside = False
-                except Exception:
-                    still_inside = False
-
-                if still_inside:
-                    try:
-                        await self.tg_client(LeaveChannelRequest(channel=input_chan))
-                        await asyncio.sleep(1)
-                    except Exception:
-                        pass
-                log("TG_LEAVE", f"✅ Đã rời khỏi '{title}' thành công 100% (Đã xác minh Server)!", Fore.GREEN)
-
-            elif isinstance(entity, Chat):
-                try:
-                    await self.tg_client(DeleteChatUserRequest(chat_id=entity.id, user_id="me"))
-                except Exception:
-                    pass
-                try:
-                    await self.tg_client.delete_dialog(InputPeerChat(chat_id=entity.id), revoke=True)
-                except Exception:
-                    pass
-                log("TG_LEAVE", f"✅ Đã rời khỏi nhóm '{title}' thành công!", Fore.GREEN)
-
-            else:
-                await self.tg_client.delete_dialog(entity, revoke=True)
-                log("TG_LEAVE", f"✅ Đã rời khỏi '{title}' thành công!", Fore.GREEN)
-
+                log("TG_ARCHIVE", f"📦 Đã đưa '{title}' vào Thư mục Lưu trữ (Archive, folder_id=1) - Giữ vĩnh viễn không out!", Fore.MAGENTA)
         except Exception as e:
-            log("TG_LEAVE_ERR", f"❌ Lỗi khi rời kênh: {e}", Fore.RED)
+            log("TG_ARCHIVE_WARN", f"Không thể lưu trữ entity: {e}", Fore.YELLOW)
+        return
 
     def record_joined_channel(self, entity, url: str = "", title: str = ""):
         """Ghi nhận nhóm/kênh đã tham gia vào hàng đợi giữ tối thiểu 8 tiếng."""
