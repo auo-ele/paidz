@@ -1,13 +1,13 @@
-name: Auto PaidZ ($USDT) 24/7 - Acc 1 (hungzai22)
+name: Auto PaidZ ($USDT) 24/7 - Acc 4 (Belinnh2k)
 
 on:
   workflow_dispatch:
   schedule:
-    # Lịch chạy đúng 00:00 đêm giờ Việt Nam mỗi ngày (17:00 UTC)
-    - cron: '0 17 * * *'
+    # Chạy mỗi 6 tiếng để duy trì liên tục
+    - cron: '0 */6 * * *'
 
 concurrency:
-  group: paidz-acc1-run
+  group: paidz-acc4-run
   cancel-in-progress: true
 
 jobs:
@@ -32,15 +32,15 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install telethon requests colorama; fi
 
-      - name: Chay Auto PaidZ Stealth 24/7 (Acc 1 - hungzai22)
+      - name: Chay Auto PaidZ Stealth 24/7 (Acc 4 - Belinnh2k)
         env:
           PYTHONUNBUFFERED: "1"
           PYTHONIOENCODING: "utf-8"
           GITHUB_REPOSITORY: "auo-ele/paidz"
-          WORKFLOW_FILE: "paidz_acc1.yml"
+          WORKFLOW_FILE: "paidz_acc4.yml"
           TELEGRAM_API_ID: "34333329"
           TELEGRAM_API_HASH: "4f9371f95000578c84dbc670aaf1f819"
-          TELEGRAM_STRING_SESSION: "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
+          TELEGRAM_STRING_SESSION: "1BVtsOMMBu4twagryqQ2jg8Lq0r5ht_iJ-LHnM5qYYrNYGz6aTkbk6gA42gQZ9ZJs80wXSEzppw8z6RK4eKpp6qtGAegFWNsoEbJpCmmd47phuoQ3YN1DPsxsX2uoWJQ60B18gArjt603YezUARHPh7opveQtVwZR9N9M8O4eSFDDQmFHeglnaqniplilMXYSF1Jr7e9E2XevLm2MkYUv4roxlragUkxtKPlSoLOd0V2JMIKN9A4yOzsRHcdI4H33W1XwP1J9UiQrb52gGxsf3i73f_NzbByCFlZPHh04aTRUhNtLBETfLb5XHLtwoxg5SOt24eSkBDRJOtaPCik32hnP3fQjTrQ="
           GH_PAT: ${{ secrets.GH_PAT }}
           MAX_RUNTIME_SECONDS: "17500"
         run: |

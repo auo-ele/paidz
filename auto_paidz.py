@@ -44,6 +44,8 @@ from telethon.tl.functions.messages import (
     ImportChatInviteRequest,
     DeleteChatUserRequest
 )
+from telethon.tl.functions.folders import EditPeerFoldersRequest
+from telethon.tl.types import InputFolderPeer
 from telethon.tl.functions.channels import (
     JoinChannelRequest,
     LeaveChannelRequest,
@@ -404,6 +406,12 @@ class PaidZClient:
                         chat_obj = updates.chats[0]
                         title = getattr(chat_obj, "title", "Nhóm kín")
                         log("TG_JOIN", f"✅ Đã tham gia '{title}' (ID: {chat_obj.id}) thành công!", Fore.GREEN)
+                        try:
+                            input_peer = await self.tg_client.get_input_entity(chat_obj)
+                            await self.tg_client(EditPeerFoldersRequest(folder_peers=[InputFolderPeer(peer=input_peer, folder_id=1)]))
+                            log("TG_ARCHIVE", f"Da dua '{title}' vao Luu tru (Archive) - Giu vinh vien khong out!", Fore.MAGENTA)
+                        except Exception:
+                            pass
                         return chat_obj
                 except UserAlreadyParticipantError:
                     ent = await self.tg_client.get_entity(url)
@@ -434,6 +442,13 @@ class PaidZClient:
             except UserAlreadyParticipantError:
                 log("TG_JOIN", f"ℹ️ Đã có mặt trong @{username} (ID: {entity.id}).", Fore.CYAN)
 
+            try:
+                input_peer = await self.tg_client.get_input_entity(entity)
+                await self.tg_client(EditPeerFoldersRequest(folder_peers=[InputFolderPeer(peer=input_peer, folder_id=1)]))
+                log("TG_ARCHIVE", f"Da dua '{title}' vao Luu tru (Archive) - Giu vinh vien khong out!", Fore.MAGENTA)
+            except Exception:
+                pass
+
             return entity
 
         except FloodWaitError as e:
@@ -444,8 +459,16 @@ class PaidZClient:
         return None
 
     async def tg_leave_target(self, entity):
+        # CHE DO GIU VINH VIEN: KHONG BAO GIO ROI KENH, CHI LUU TRU (ARCHIVE)
         if not entity:
             return
+        try:
+            if await self.ensure_tg_connected():
+                input_peer = await self.tg_client.get_input_entity(entity)
+                await self.tg_client(EditPeerFoldersRequest(folder_peers=[InputFolderPeer(peer=input_peer, folder_id=1)]))
+        except Exception:
+            pass
+        return
 
         # KIỂM TRA BẢO VỆ KÊNH CHÍNH THỨC (@PAIDZ_NEWS / ID: 2307369718)
         if is_protected_entity(entity):
@@ -571,6 +594,8 @@ class PaidZClient:
         log("RETENTION", f"📌 Ghi nhận nhóm '{ent_title}' (ID: {ent_id}) vào hàng đợi giữ 8 tiếng. Tuyệt đối KHÔNG rời trước 8h!", Fore.GREEN)
 
     async def cleanup_expired_retention_channels(self):
+        # TAT CA KENH DEU DUOC GIU VINH VIEN TRONG LUU TRU (ARCHIVE)
+        return
         """Kiểm tra và chỉ rời các nhóm đã tham gia đủ >= 8 tiếng theo quy định của PaidZ."""
         channels = self.retention_data.get("channels", {})
         if not channels:
