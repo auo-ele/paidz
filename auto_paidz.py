@@ -75,12 +75,7 @@ def _safe_int(val, default):
 
 TELEGRAM_API_ID = _safe_int(os.getenv("TELEGRAM_API_ID"), 24719662)
 TELEGRAM_API_HASH = (os.getenv("TELEGRAM_API_HASH") or "1f6c433e38706fa2e7d77bdfd9a6fdf9").strip()
-TELEGRAM_STRING_SESSION = (os.getenv("TELEGRAM_STRING_SESSION") or (
-    "1BVtsOMMBu4twagryqQ2jg8Lq0r5ht_iJ-LHnM5qYYrNYGz6aTkbk6gA42gQZ9ZJs80wXSEzppw8z6RK4eKpp6qt"
-    "GAegFWNsoEbJpCmmd47phuoQ3YN1DPsxsX2uoWJQ60B18gArjt603YezUARHPh7opveQtVwZR9N9M8O4eSFDDQmF"
-    "HeglnaqniplilMXYSF1Jr7e9E2XevLm2MkYUv4roxlragUkxtKPlSoLOd0V2JMIKN9A4yOzsRHcdI4H33W1XwP1J"
-    "9UiQrb52gGxsf3i73f_NzbByCFlZPHh04aTRUhNtLBETfLb5XHLtwoxg5SOt24eSkBDRJOtaPCik32hnP3fQjTrQ="
-)).strip()
+TELEGRAM_STRING_SESSION = (os.getenv("TELEGRAM_STRING_SESSION") or "1BVtsOMMBu6WXSbH0pQyd4FdW0Fc-zqEWvx3RMUB53LJeKWWB6t61lV-p3TcR3k2psUxcUtbmfdeC1jATK8f7i5jIX_eiplenW3A-h9ALZB7cq9PodKB_KJP4fhOMNeb43G8H7SbF5hDnrdPOiFMEYS1tbjOrmzNu_UyzNe64ndfKb9SSpsTZtrKbo3ryx4x7gpXHrrfISsyMUm6gOjEl9KbyvWCt94yu_spYicw2YsAGCMlKmEYqGIIIpItqZ4VJrdwPtzS__VudhSQzwM56cZMwgTsicw0NA_zaRmgZ4sJEU0ADeMMutBhDtL-kQsJQUb145Ybagpel5xAK86xAKjaeQau5R1I=").strip()
 
 API_BASE = "https://api.paidz.biz"
 REPO_NAME = (os.getenv("GITHUB_REPOSITORY") or "auo-ele/paidz").strip()
