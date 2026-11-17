@@ -961,6 +961,14 @@
       "url": "https://t.me/notwise_bot/thegame?startapp=1fc33c3d414941e39f71151bd9347e1e",
       "joined_at": 1794913373.073958,
       "status": "active"
+    },
+    "4484061373": {
+      "id": 4484061373,
+      "username": "coinflow_pro",
+      "title": "CoinFlow.pro",
+      "url": "https://t.me/coinflow_pro",
+      "joined_at": 1794913440.6258414,
+      "status": "active"
     }
   }
 }
